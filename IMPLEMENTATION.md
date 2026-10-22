@@ -41,7 +41,9 @@ src/gate_n_guard/
   openrouter.py      # SHIPPED: OpenRouter chat transport (httpx)
   client.py          # SHIPPED: AdvisoryClient retry/fallback chain
   config.py          # SHIPPED: GATE_N_GUARD_* env parsing
-  server.py          # SHIPPED: MCPServer app + 4 tools + main()
+  server.py          # SHIPPED: MCPServer app (instructions, title, version) +
+                     #   4 tools with typed schemas, annotations, isError
+                     #   errors + main()
   __main__.py        # SHIPPED: python -m gate_n_guard
 tests/
   test_rules.py      # matcher: precedence, predicates, errors, determinism
@@ -49,7 +51,8 @@ tests/
   test_loader.py     # sources, ref hashing, attach_ref
   test_advise.py     # deterministic apply, escalation, shapes (fake client)
   test_client.py     # retries, fallback chain, routing (fake transports)
-  test_server.py     # registration + wiring smoke (injected fakes)
+  test_server.py     # registration, handler wiring, and the advertised
+                     #   contract (instructions, schemas, annotations, isError)
 ```
 
 ## Config (env vars)
@@ -70,7 +73,7 @@ tests/
 | `HF_ENDPOINT` | — | dedicated HF inference endpoint (pins HF transport) |
 | `OPENROUTER_BASE_URL` / `OPENROUTER_SITE_URL` / `OPENROUTER_APP_NAME` | defaults | OpenRouter endpoint + optional referer/title headers |
 
-## Modules shipped (tested, 120 tests)
+## Modules shipped (tested, 129 tests)
 
 - **rules.py** — `load_rulebook` (validation), `check` envelope:
   `{verdict, precedence, matched[], default_applied, trace}`; both
@@ -86,11 +89,30 @@ tests/
 - **openrouter.py / client.py / config.py** — look-n-see engine port,
   chat-only (`AdvisoryClient`), `GATE_N_GUARD_*` env binding.
 
+## Advertised contract (what a client sees before calling)
+
+MCP offers four channels for a server to describe itself; all four now carry
+content (`create_server`, `src/gate_n_guard/server.py`):
+
+| Channel | Content | Why |
+|---|---|---|
+| server `instructions` | the gate contract — call `check` before acting; `deny` = do not act; `confirm` = a human decides; verdicts are advice and the server enforces nothing; every response names `rulebook_ref`; rulebook shape and any-entry (OR) semantics | the only prose a model sees without opening tool docs; a gate that never states its contract is discoverable but not usable |
+| `inputSchema` | `check.action` required; `rules` typed `string \| object`; enums for `verdict` / `question` / `mode` / `engine`; `audit.limit` bounded 1–1000 | a bad argument fails at the protocol boundary (`isError`) instead of coming back as a handler message the model must interpret |
+| `annotations` | `check` / `audit` read-only and closed-world; `record` non-destructive, local; `advise` open-world (it calls a model) | hosts can auto-approve the deterministic tools and prompt on journal writes and network calls |
+| `isError` | module errors return the `{"error": ...}` JSON body with `isError: true` | the payload stays machine-readable while hosts that branch on the flag no longer read failures as results |
+
+`serverInfo` carries `name`, `title`, `description`, `websiteUrl`, and
+`version` (`gate_n_guard.__version__`).
+
+Not advertised: `outputSchema` / `structuredContent`. Responses are JSON text
+in one content block; declaring output schemas is a possible follow-up, and no
+test claims otherwise.
+
 ## Remaining work
 
 None for v1 scope: all seven design questions are resolved (Q7: static
 reasons) and every module — matcher, journal, loader, advise, engines,
-server, entry point — ships with tests (120). Live advisory calls with
+server, entry point — ships with tests (129). Live advisory calls with
 real keys ran through the registered OMP server (2026-10-23: interpret
 single/whole, apply model-mode, apply auto escalation, gap), and the
 without-keys error path was live-verified against a fresh keyless
@@ -102,6 +124,10 @@ quality/latency like look-n-see did before release.
 - `python -m compileall` / import smoke after changes.
 - `.venv/bin/python -m unittest discover -s tests -q` — the offline suite
   (matcher, journal, loader, advise, client; no network).
+- The advertised contract is asserted offline in
+  `tests/test_server.py::AdvertisementTests` (instructions, `serverInfo`
+  version, required/enum/bound schema fields, annotations, `isError` on
+  handler failures, schema rejection before the handler) — no harness needed.
 - Live advisory calls are manual smoke (real MCP call through the harness),
   not part of the suite.
 

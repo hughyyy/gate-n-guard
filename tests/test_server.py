@@ -6,11 +6,15 @@ import json
 import os
 import tempfile
 import unittest
+from typing import get_args
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
+from gate_n_guard import __version__
 from gate_n_guard import config as config_mod
-from gate_n_guard.server import GateHandler, create_server
+from gate_n_guard import journal as journal_mod
+from gate_n_guard.server import GateHandler, _Verdict, create_server
 
 RULES = {"default": "allow", "rules": [
     {"id": "no-rm", "when": [{"tool": "bash", "arguments": {"command": {"contains": "rm -rf"}}}],
@@ -188,7 +192,79 @@ class ServerTests(unittest.TestCase):
             "action": {"tool": "deploy"},
             "verdict": "confirm",
         }))
-        self.assertIn("journal not configured", str(result))
+        self.assertTrue(result.is_error)
+        self.assertIn("journal not configured", json.loads(result.content[0].text)["error"])
+
+
+class AdvertisementTests(unittest.TestCase):
+    """The model-facing contract: what a fresh client learns before calling."""
+
+    def setUp(self):
+        self.server = create_server()
+        self.tools = {tool.name: tool for tool in asyncio.run(self.server.list_tools())}
+
+    def test_instructions_state_the_gate_contract(self):
+        text = self.server.instructions or ""
+        self.assertIn("Call check before acting", text)
+        self.assertIn("deny means do not act", text)
+        self.assertIn("enforces nothing", text)
+        self.assertIn("isError", text)
+
+    def test_server_info_names_a_version(self):
+        self.assertEqual(self.server.version, __version__)
+        self.assertTrue(self.server.version)
+
+    def test_check_requires_action_and_types_both_rulebook_forms(self):
+        schema = self.tools["check"].input_schema
+        self.assertEqual(schema["required"], ["action"])
+        arms = schema["properties"]["rules"]["anyOf"]
+        self.assertIn({"type": "string"}, arms)
+        self.assertTrue(any(arm.get("type") == "object" for arm in arms))
+
+    def test_closed_vocabularies_are_enums(self):
+        verdicts = ["allow", "confirm", "deny"]
+        self.assertEqual(self.tools["record"].input_schema["properties"]["verdict"]["enum"], verdicts)
+        audit_verdict = self.tools["audit"].input_schema["properties"]["verdict"]["anyOf"]
+        self.assertEqual([arm["enum"] for arm in audit_verdict if "enum" in arm], [verdicts])
+        advise = self.tools["advise"].input_schema["properties"]
+        self.assertEqual(advise["question"]["enum"], ["interpret", "apply", "gap"])
+        self.assertEqual(advise["mode"]["enum"], ["auto", "model"])
+        self.assertEqual(
+            [arm["enum"] for arm in advise["engine"]["anyOf"] if "enum" in arm],
+            [["auto", "hf", "openrouter"]],
+        )
+
+    def test_audit_limit_bounds_match_the_journal(self):
+        limit = self.tools["audit"].input_schema["properties"]["limit"]
+        self.assertEqual((limit["minimum"], limit["maximum"]), (1, journal_mod.MAX_AUDIT_LIMIT))
+        self.assertEqual(limit["default"], 50)
+
+    def test_verdict_enum_matches_the_journal(self):
+        self.assertEqual(set(get_args(_Verdict)), set(journal_mod.VERDICTS))
+
+    def test_annotations_separate_reads_from_writes(self):
+        self.assertTrue(self.tools["check"].annotations.read_only_hint)
+        self.assertTrue(self.tools["audit"].annotations.read_only_hint)
+        self.assertFalse(self.tools["record"].annotations.read_only_hint)
+        self.assertFalse(self.tools["advise"].annotations.read_only_hint)
+        self.assertFalse(self.tools["check"].annotations.open_world_hint)
+        self.assertTrue(self.tools["advise"].annotations.open_world_hint)
+
+    def test_schema_rejects_bad_arguments_before_the_handler(self):
+        for name, args in (
+            ("check", {}),
+            ("audit", {"limit": journal_mod.MAX_AUDIT_LIMIT + 1}),
+            ("advise", {"question": "explain"}),
+            ("record", {"action": {"tool": "x"}, "verdict": "maybe"}),
+        ):
+            with self.subTest(tool=name), self.assertRaises(ToolError):
+                asyncio.run(self.server.call_tool(name, args))
+
+    def test_no_tool_advertises_an_output_schema(self):
+        # Responses are JSON text the caller parses; nothing claims structuredContent.
+        for name, tool in self.tools.items():
+            with self.subTest(tool=name):
+                self.assertIsNone(tool.output_schema)
 
 
 if __name__ == "__main__":

@@ -13,11 +13,13 @@ collection: [look-n-see](../look-n-see) (vision/OCR), [scrape-n-search](../scrap
 > resolved (1–7; Q7: static reasons). The full surface ships: matcher (both
 > precedence modes), decision journal, rulebook loader with `rulebook_ref`,
 > advise with deterministic apply, and the stdio server registering `check` /
-> `record` / `audit` / `advise` — 120 offline tests, live stdio smoke passed,
+> `record` / `audit` / `advise` — 129 offline tests, live stdio smoke passed,
 > and a direct test campaign through the registered OMP server (~45 calls:
 > verdict matrix, precedence modes, journal round-trip and filters, advise
-> modes, error paths, determinism). See `BRIEF.md` (requirements) and
-> `IMPLEMENTATION.md` (design, release plan).
+> modes, error paths, determinism). The advertised contract (server
+> instructions, typed schemas, tool annotations, `isError` on failures) is
+> covered by tests too. See `BRIEF.md` (requirements) and `IMPLEMENTATION.md`
+> (design, release plan).
 
 ## The idea
 
@@ -56,12 +58,30 @@ reads — decision history for confirm/deny trails, never rule storage.
 | `check` | `rules` (inline JSON, `file:<path>` ref, or omitted → `GATE_N_GUARD_RULEBOOK` default), `action` (required: tool + arguments), `situation`? (agent id, context facts) | verdict `allow` / `confirm` / `deny`, matched rule(s), per-rule reasons, trace of rules consulted, no-match default applied, `rulebook_ref` naming the exact rulebook version |
 | `record` | `action` (required), `verdict` (required), `matched`? (rule ids), `rulebook`?, `outcome`?, `actor`?, `note`? | the stored record (id, ts, fields); appends one JSONL line to the journal |
 | `audit` | `limit`? (default 50, max 1000), `since`? / `before`? (ISO-8601), `verdict`?, `outcome`?, `tool`? | `{count, skipped, records[]}` newest-first; malformed lines are skipped and counted, never fatal |
-| `advise` | `rules` (required), `question` (required: interpret / apply / gap), `situation`?, `rule_id`? (interpret only), `mode`? (`auto` default / `model`), `engine`?, `model`? | structured advice per kind; `apply` + `auto` answers from the matcher (deterministic) when rules match, escalating to the model only when nothing matched |
+| `advise` | `rules` (inline JSON, `file:<path>` ref, or omitted → `GATE_N_GUARD_RULEBOOK` default), `question`? (`apply` default: interpret / apply / gap), `situation`?, `action`? (required for apply/gap), `rule_id`? (interpret only), `mode`? (`auto` default / `model`), `engine`? (`auto` / `hf` / `openrouter`), `model`? | structured advice per kind; `apply` + `auto` answers from the matcher (deterministic) when rules match, escalating to the model only when nothing matched |
 
 Input discipline (house rules): rulebooks are JSON or JSON path refs, actions
 are `{tool, arguments}` objects, situations are JSON objects of facts the
 rulebook can match against; every tool returns structured JSON the calling
 model can act on, never prose-only.
+
+What a client sees before calling (the advertisement, not the docs):
+
+- **Server instructions** state the contract — call `check` before acting;
+  `deny` means do not act, `confirm` means a human decides; the verdict is
+  advice and the server enforces nothing; every response names its
+  `rulebook_ref`. This is the only channel that reaches a model which never
+  reads the tool descriptions.
+- **Schemas** carry the closed vocabularies (`verdict`, `question`, `mode`,
+  `engine` as enums), the required `check.action`, the `rules` param typed as
+  string-or-object, and `audit.limit` bounded to 1–1000 — so bad arguments
+  fail at the protocol boundary, not inside the handler.
+- **Annotations** mark `check`/`audit` read-only and closed-world;
+  `record` non-destructive and local; `advise` open-world (it calls a model) —
+  a host can auto-approve the deterministic tools and prompt on the rest.
+- **Errors** keep the structured `{"error": ...}` body but arrive with
+  `isError: true`, so a model or host branching on the protocol flag sees a
+  failure rather than a result.
 
 ## Rulebooks (draft)
 

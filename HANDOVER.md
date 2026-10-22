@@ -25,12 +25,14 @@ weigh-n-decide, gate-n-guard).
 
 ## Current state (verified 2026-10-23)
 
-- **120 tests pass** (`.venv/bin/python -m unittest discover -s tests -q`,
+- **129 tests pass** (`.venv/bin/python -m unittest discover -s tests -q`,
   zero dev deps): matcher (both precedence modes, predicates, errors,
   determinism), journal (append/filters/malformed-line tolerance), loader
   (sources, ref hashing), advise (deterministic apply, escalation, shapes),
-  client (retries, fallback chain, routing), server (registration + wiring
-  with injected fakes). Three added 2026-10-23 defend the prompt fixes below.
+  client (retries, fallback chain, routing), server (registration, wiring with
+  injected fakes, and — 9 tests — the advertised contract: instructions,
+  schema enums/bounds/required, annotations, `isError`). Three added
+  2026-10-23 defend the prompt fixes below.
 - **Full live test campaign through the registered OMP server (~45 calls,
   2026-10-23)**: all four tools exercised. Highlights beyond the standing
   smoke: `strictest` mode deny-dominance and all-consulted trace; type-strict
@@ -160,6 +162,26 @@ with `GATE_N_GUARD_RULEBOOK=examples/rulebook.json` and a throwaway journal;
   guard is correct; it is simply unreachable through this harness.
 - **The sample rulebook is an OR trap** — see Known issues below.
 
+### Advertisement fix (2026-10-23, later)
+
+`tools/list` used to advertise four names, docstring-only descriptions, no
+enums, an untyped `rules`, an optional `check.action`, no annotations, no
+`instructions`, and every failure as a successful result. Fixed in one change
+(see `IMPLEMENTATION.md` → *Advertised contract*); evidence:
+
+| Check | Observed |
+|---|---|
+| `initialize` | `serverInfo {name, title, description, version: "0.1.0", websiteUrl}`; `instructions` 1295 chars carrying the gate contract |
+| `check` schema | `required: ["action"]`; `rules` = `anyOf[string, object, null]` |
+| `record` / `audit` / `advise` schemas | `verdict` enum ×2, `question` enum, `mode` enum, `engine` enum; `audit.limit` `minimum 1 / maximum 1000` |
+| annotations | `check`/`audit` read-only + closed; `record` non-destructive, closed; `advise` open-world |
+| `check {}` | `isError: true`, `Error executing tool check: 1 validation error … action Field required` |
+| `record verdict="maybe"` | `isError: true`, literal_error naming the three verdicts |
+| `audit limit=5000` | `isError: true`, `less_than_or_equal` |
+| `advise question="explain"` | `isError: true`, literal_error naming the three questions |
+| `check rules="nope"` (handler error) | `isError: true`, body `{"error": "rules string must be a 'file:<path>' ref or inline JSON, got 'nope'"}` |
+| suite | `Ran 129 tests` — `OK` |
+
 ## Known issues / notes
 
 - **System python has no pip** — always use the repo `.venv` (editable
@@ -168,7 +190,13 @@ with `GATE_N_GUARD_RULEBOOK=examples/rulebook.json` and a throwaway journal;
   inherited from look-n-see, **not benchmarked for advice quality/latency**.
   look-n-see did a benchmark sweep before release; worth repeating for the
   advisory path (prompt shapes differ).
-- MCPServer advertises an empty `version` string (cosmetic).
+- `serverInfo.version` now reports `gate_n_guard.__version__` (`0.1.0`); it used
+  to be empty.
+- Contract change worth knowing: `audit(limit=1001..)` is now rejected by the
+  schema (`isError: true`) instead of being clamped; `read_journal` still
+  clamps when called directly. Likewise `record(verdict="maybe")` and
+  `advise(question="explain")` fail validation at the protocol boundary, so
+  those module checks are now a second line of defence rather than the first.
 - `record`/`audit` need `GATE_N_GUARD_JOURNAL`; `check`/`advise` never touch
   the journal. `var/` is gitignored; `examples/rulebook.json` is the
   committed sample default.
