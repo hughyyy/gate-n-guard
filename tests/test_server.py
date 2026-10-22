@@ -104,6 +104,13 @@ class HandlerTests(unittest.TestCase):
         with self.assertRaises(RulebookSourceError):
             handler.check(None, {"tool": "git"}, {})
 
+    def test_check_empty_rules_string_errors_loudly(self):
+        handler = GateHandler(make_config(self.dir.name, rulebook=self.write_rulebook()))
+        from gate_n_guard.loader import RulebookSourceError
+        with self.assertRaises(RulebookSourceError) as ctx:
+            handler.check("", {"tool": "git"}, {})
+        self.assertIn("file:<path>", str(ctx.exception))
+
     def test_record_and_audit_round_trip(self):
         journal = os.path.join(self.dir.name, "j.jsonl")
         handler = GateHandler(make_config(self.dir.name, journal=journal))

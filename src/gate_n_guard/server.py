@@ -37,7 +37,7 @@ class GateHandler:
         return self._default
 
     def _rulebook(self, rules):
-        if rules is None or rules == "":
+        if rules is None:
             return self._default_rulebook()
         return resolve_rulebook(rules)
 
