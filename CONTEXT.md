@@ -48,6 +48,18 @@ The per-call record of which rules were consulted, in order, with each
 predicate's outcome and the verdict that fell out — reproducible and diffable.
 _Avoid_: log, audit, proof
 
+**Record**:
+One journaled decision: id, UTC timestamp, the action, the verdict, matched
+rule ids, optional rulebook/outcome/actor/note. Written verbatim by `record`;
+never mutated or deleted.
+_Avoid_: entry (taken by rules), log line (implies unstructured)
+
+**Journal**:
+The optional append-only JSONL file (`GATE_N_GUARD_JOURNAL`) that holds
+records. Decision history only — rulebooks never live there. Unset journal
+means `record`/`audit` error clearly and `check` is unaffected.
+_Avoid_: log (unstructured), database, store (that is store-n-recall's term)
+
 **Advice**:
 The structured output of `advise`: applicable rules, their interpretations,
 caveats, suggestions. Never a verdict.

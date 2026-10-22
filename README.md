@@ -38,8 +38,12 @@ Three gaps this closes for an agent:
   with the situation in hand and returns structured findings the agent can act
   on. Only `advise` talks to a model; the gate itself is mechanical.
 
-The server is **stateless** — rulebooks and actions are passed in with each call
-and nothing is stored. `check` is deterministic and never touches the network;
+The server is **stateless in its mechanics** — rulebooks, actions, and
+situations are passed in with each call and nothing is kept in memory;
+`check` is deterministic and never touches the network. The only optional
+persistence is an append-only decision journal (JSONL at
+`GATE_N_GUARD_JOURNAL` when configured) that `record` writes and `audit`
+reads — decision history for confirm/deny trails, never rule storage.
 `advise` is the only networked call.
 
 ## Tool surface (draft)
@@ -47,6 +51,8 @@ and nothing is stored. `check` is deterministic and never touches the network;
 | Tool | Params | Returns |
 | --- | --- | --- |
 | `check` | `rules` (required: rulebook, inline or ref), `action` (required: tool + arguments), `situation`? (agent id, context facts) | verdict `allow` / `confirm` / `deny`, matched rule(s), per-rule reasons, trace of rules consulted, no-match default applied |
+| `record` | `action` (required), `verdict` (required), `matched`? (rule ids), `rulebook`?, `outcome`?, `actor`?, `note`? | the stored record (id, ts, fields); appends one JSONL line to the journal |
+| `audit` | `limit`? (default 50, max 1000), `since`? / `before`? (ISO-8601), `verdict`?, `outcome`?, `tool`? | `{count, skipped, records[]}` newest-first; malformed lines are skipped and counted, never fatal |
 | `advise` | `rules` (required), `situation`? (agent + context), `question` (required: interpret / apply / gap), `engine`?, `model`? | structured advice: applicable rules with interpretations, answers to the question, caveats |
 
 Input discipline (house rules): rulebooks are JSON or JSON path refs, actions
@@ -137,6 +143,34 @@ a `deny` is out of scope. Enforcement (intercepting the tool call) is what the
 gateway-style tools do (see research notes); this server makes the verdict, the
 harness makes it stick.
 
+## Decision journal (draft)
+
+`confirm` verdicts mean "a human must approve before this runs", but the MCP
+conversation is not a queryable record of what was approved. The journal is
+that record, when configured:
+
+- Append-only JSONL at the `GATE_N_GUARD_JOURNAL` path (env). Unset →
+  `record`/`audit` error clearly and `check` is unaffected. One JSON object
+  per line; single-line appends are atomic on POSIX for journal-sized lines.
+- No rewrite or delete API in v1 — the journal is decision history, and
+  history is append-only (the store-n-recall posture).
+- Record fields: `id` (uuid4), `ts` (UTC ISO-8601, server-assigned),
+  `action` `{tool, arguments}`, `verdict` (`allow`/`confirm`/`deny`),
+  `matched` (rule ids), `rulebook`, `outcome`, `actor`, `note`.
+  `outcome` is free-form, documented examples: `approved`, `denied`,
+  `executed`, `aborted`, `escalated` — how the confirm resolved.
+- `audit` reads newest-first with filters (`verdict`, `outcome`, `tool`,
+  `since`/`before`, `limit`); a line that is not valid JSON or lacks a
+  parseable `ts` is skipped and counted in `skipped`, never fatal.
+- Journaling is a caller choice: `record` is explicit, not an automatic
+  side effect of `check` — the agent decides what deserves a trail.
+
+## Configuring the audit journal
+
+```bash
+export GATE_N_GUARD_JOURNAL=/path/to/gate-decisions.jsonl
+```
+
 ## Advise (draft)
 
 `advise` is the only model-backed tool, following look-n-see's engine pattern
@@ -164,6 +198,7 @@ word is never a verdict: `check` is the only thing that decides.
 | `GATE_N_GUARD_MODEL` | engine-dependent | default model for `advise` |
 | `GATE_N_GUARD_FALLBACKS` | — | fallback chain tried after the default fails |
 | `GATE_N_GUARD_RULEBOOK` | — | optional default rulebook path used when `rules` is omitted |
+| `GATE_N_GUARD_JOURNAL` | — | optional append-only decision journal (JSONL); unset → `record`/`audit` error clearly |
 | `OPENROUTER_API_KEY` / `HF_TOKEN` | — | secrets, env only (same as look-n-see) |
 
 ## Install
@@ -264,12 +299,12 @@ the framing but not the call.
    precedent). Aligning with weigh-n-decide's full condition grammar
    (composition, arithmetic) is documented as a possible later evolution
    (see Rulebooks section), not v1.
-4. **Confirm flow** — verdict-only (caller surfaces the human prompt) vs a
-   `confirm`/`record` tool that journals decisions to a file for audit
-   (store-n-recall-style sqlite or append-only JSONL)? Evidence: AEGIS keeps
-   approvals as a queue + dashboard (service shape — out of scope);
-   AgenticContract has an `approval_request`/`approval_decide` lifecycle in
-   its store. Stateless v1?
+4. **Confirm flow — RESOLVED (2026-10-22).** Verdict-only `check`, plus an
+   optional append-only decision journal: `record` appends one JSONL line
+   (`GATE_N_GUARD_JOURNAL`) and `audit` reads it back newest-first with
+   filters. No approval queue or request/resolve lifecycle — the MCP
+   conversation is the approval channel, the journal is the trail. See
+   Decision journal section.
 5. **Advise surface** — one `advise` tool with a `question` enum, or separate
    tools (`interpret_rule`, `applicable_rules`, `rule_gap`)? Does
    "applicable rules" have a deterministic mode that skips the model entirely?

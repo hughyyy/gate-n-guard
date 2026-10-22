@@ -26,10 +26,13 @@ implementing.
   stdlib `unittest`, zero dev deps.
 - Determinism: `check` is pure local compute — no network, no randomness,
   stable output ordering; same action + rulebook + situation → same verdict and
-  trace. `advise` is the only networked tool, and its output is advice, never
-  a verdict.
-- Stateless tools: rulebooks, actions, and situations are passed per call;
-  nothing persisted server-side.
+  trace. `record`/`audit` are journal I/O (append JSONL / read back), the only
+  file-touching tools; `advise` is the only networked tool, and its output is
+  advice, never a verdict.
+- Stateless mechanics: rulebooks, actions, and situations are passed per call;
+  nothing is kept in memory. The only persistence is the optional append-only
+  journal (`GATE_N_GUARD_JOURNAL`, JSONL) that `record` writes and `audit`
+  reads — decision history, never rule storage; no rewrite or delete path.
 - Every tool returns structured output the calling model can act on (JSON
   where it matters, not prose-only). Missing rule ids, action fields, or
   situation paths degrade to clear errors, never tracebacks.
@@ -42,9 +45,9 @@ implementing.
   secrets from env only, never hardcoded or committed.
 - OMP's default MCP request timeout is 30 s — `check` must stay sub-second;
   `advise` needs a raised registration timeout (README shows 120 s).
-- Tool surface stays minimal (`check`, `advise`). A new tool needs a README
-  row and a reason it cannot be a param or question kind; a new predicate,
-  verdict, or env var needs a README update in the same change.
+- Tool surface stays minimal (`check`, `record`, `audit`, `advise`). A new
+  tool needs a README row and a reason it cannot be a param or question kind;
+  a new predicate, verdict, or env var needs a README update in the same change.
 
 ## Workflow
 
