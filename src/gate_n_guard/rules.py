@@ -12,8 +12,14 @@ precedence mode (`first-match` or `strictest`). A rule matches when any of its
 
 Predicate operands: a bare value means equality (same JSON type); a
 single-key object selects an operator — `glob` (fnmatch over strings),
-`contains` (string substring), `in` (value in list), `eq`, and the numeric
-comparisons `lt`/`lte`/`gt`/`gte`.
+`contains` (string substring), `matches` (regular-expression search, pattern
+compiled and syntax-checked at rulebook load), `in` (value in list), `eq`,
+and the numeric comparisons `lt`/`lte`/`gt`/`gte`.
+
+This predicate subset is the whole v1 grammar by design; aligning the matcher
+with weigh-n-decide's full condition grammar (boolean composition,
+arithmetic) is a possible later evolution — `_operand_predicate` /
+`_arguments_predicates` normalization is the single seam where it would land.
 
 Missing paths are errors, never silent falses — but only when actually
 consulted: predicates inside a `when` entry and entries inside a rule are
@@ -25,6 +31,7 @@ rulebooks raise `RulebookError` at load time.
 from __future__ import annotations
 
 import fnmatch
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,7 +39,7 @@ VERDICTS = ("allow", "confirm", "deny")
 PRECEDENCE_MODES = ("first-match", "strictest")
 STRICTEST_ORDER = {"allow": 0, "confirm": 1, "deny": 2}
 
-_OPERATORS = ("glob", "contains", "in", "lt", "lte", "gt", "gte", "eq")
+_OPERATORS = ("glob", "contains", "in", "lt", "lte", "gt", "gte", "eq", "matches")
 
 
 class RulebookError(ValueError):
@@ -48,6 +55,7 @@ class Predicate:
     path: str
     operator: str
     value: Any
+    compiled: Any = None  # precompiled regex for the `matches` operator
 
 
 @dataclass(frozen=True)
@@ -164,9 +172,7 @@ def _arguments_predicates(path: str, operand: Any, rule_id: str) -> list:
                     f"rule {rule_id!r}: {path}: operator {operator!r} must be "
                     "the only key"
                 )
-            if operator == "in" and not isinstance(operand[operator], list):
-                raise RulebookError(f"rule {rule_id!r}: {path}: 'in' requires a list")
-            return [Predicate(path, operator, operand[operator])]
+            return [_make_predicate(path, operator, operand[operator], rule_id)]
         predicates = []
         for sub_key, sub_operand in operand.items():
             predicates.extend(
@@ -188,10 +194,31 @@ def _operand_predicate(path: str, operand: Any, rule_id: str) -> Predicate:
             raise RulebookError(
                 f"rule {rule_id!r}: {path}: unknown operator {operator!r}"
             )
-        if operator == "in" and not isinstance(value, list):
-            raise RulebookError(f"rule {rule_id!r}: {path}: 'in' requires a list")
-        return Predicate(path, operator, value)
+        return _make_predicate(path, operator, value, rule_id)
     return Predicate(path, "eq", operand)
+
+
+def _make_predicate(path: str, operator: str, value: Any, rule_id: str) -> Predicate:
+    """Build a predicate, validating operator-specific operand shapes.
+
+    `matches` patterns are compiled here so a syntax error in the rulebook is
+    a load-time RulebookError, not a runtime surprise.
+    """
+    if operator == "matches":
+        if not isinstance(value, str):
+            raise RulebookError(
+                f"rule {rule_id!r}: {path}: 'matches' requires a string pattern"
+            )
+        try:
+            compiled = re.compile(value)
+        except re.error as exc:
+            raise RulebookError(
+                f"rule {rule_id!r}: {path}: invalid regex pattern: {exc}"
+            ) from exc
+        return Predicate(path, operator, value, compiled)
+    if operator == "in" and not isinstance(value, list):
+        raise RulebookError(f"rule {rule_id!r}: {path}: 'in' requires a list")
+    return Predicate(path, operator, value)
 
 
 # --------------------------------------------------------------------------
@@ -357,6 +384,9 @@ def _satisfies(predicate: Predicate, value: Any) -> bool:
     if op == "contains":
         _require_strings(predicate, value, want)
         return want in value
+    if op == "matches":
+        _require_strings(predicate, value, want)
+        return predicate.compiled.search(value) is not None
     if op == "in":
         return value in want
     if op in ("lt", "lte", "gt", "gte"):

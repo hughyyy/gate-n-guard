@@ -216,6 +216,37 @@ class PredicateTests(unittest.TestCase):
         self.assertEqual(check(rbook, {"tool": "x"}, {"flag": 1})["verdict"], "allow")
         self.assertEqual(check(rbook, {"tool": "x"}, {"flag": "true"})["verdict"], "allow")
 
+    def test_matches_regex_search(self):
+        rbook = book([rule(
+            "prune", [{"tool": "bash", "arguments": {"command": {"matches": r"\bdocker\s+system\s+prune\b"}}}], "deny",
+        )])
+        self.assertEqual(
+            check(rbook, {"tool": "bash", "arguments": {"command": "sudo docker system prune -af"}}, SITUATION)["verdict"],
+            "deny",
+        )
+        self.assertEqual(
+            check(rbook, {"tool": "bash", "arguments": {"command": "docker ps"}}, SITUATION)["verdict"],
+            "allow",
+        )
+
+    def test_matches_anchored_pattern(self):
+        rbook = book([rule("rm", [{"tool": "bash", "arguments": {"command": {"matches": r"^rm\b"}}}], "deny")])
+        self.assertEqual(check(rbook, {"tool": "bash", "arguments": {"command": "rm -rf /tmp"}}, SITUATION)["verdict"], "deny")
+        self.assertEqual(check(rbook, {"tool": "bash", "arguments": {"command": "xrm -rf"}}, SITUATION)["verdict"], "allow")
+
+    def test_matches_invalid_regex_rejected_at_load(self):
+        with self.assertRaises(RulebookError):
+            book([rule("bad", [{"tool": {"matches": "("}}], "deny")])
+
+    def test_matches_pattern_must_be_string(self):
+        with self.assertRaises(RulebookError):
+            book([rule("bad", [{"tool": {"matches": 5}}], "deny")])
+
+    def test_matches_non_string_value(self):
+        rbook = book([rule("n", [{"situation.total": {"matches": r"\d+"}}], "deny")])
+        with self.assertRaises(RulebookError):
+            check(rbook, {"tool": "x"}, {"total": 150})
+
     def test_arguments_nested_path(self):
         rbook = book([rule("path", [{"arguments": {"options": {"path": {"contains": "secrets"}}}}], "deny")])
         action = {"tool": "read", "arguments": {"options": {"path": "/var/secrets/x"}}}

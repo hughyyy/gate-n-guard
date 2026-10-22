@@ -89,11 +89,19 @@ Draft semantics:
 - A **rule** matches when any of its `when` entries holds; each entry is a
   conjunction of predicates on the action (`tool`, `arguments`), the agent
   (`situation.agent`), or situation facts (`situation.path.to.fact`).
-- Predicates are globs for strings (`{"contains": "rm -rf"}`,
-  `{"glob": "deploy*"}`), equality/comparison for literals, `in` for lists —
-  a deliberate subset of weigh-n-decide's literal condition grammar, evaluated
+- Predicates: equality/comparison for literals, `in` for lists, string `glob`
+  (fnmatch) and `contains`, and `matches` — regular-expression search
+  (stdlib `re`; the pattern is compiled and syntax-checked when the rulebook
+  loads, so a bad regex is a load error). `matches` is the casbin/AEGIS
+  command-guard precedent (`\bdocker\s+system\s+prune\b`). This is a
+  deliberate subset of weigh-n-decide's literal condition grammar, evaluated
   the same deterministic way (no `eval()`, missing fact path is an error, not
   a silent false).
+- **Grammar growth:** v1 stops at this predicate subset on purpose.
+  Aligning the matcher with weigh-n-decide's full condition grammar (boolean
+  composition — `not`/nested `and`/`or` — and arithmetic) is a possible later
+  evolution; predicate normalization in the matcher is the single seam where
+  that alignment would land, so v1 loses nothing by deferring.
 - **Precedence** is a rulebook-level mode, `first-match` (default) or
   `strictest`:
   - `first-match` scans rules in order; the **first** matched rule's verdict
@@ -250,12 +258,12 @@ the framing but not the call.
    field, `allow` by default, `confirm`/`deny` selectable per rulebook
    (AEGIS-style fail-safe posture remains a configuration choice, not the
    shipping default). Matcher and tests already cover all three values.
-3. **Match grammar scope** — reuse weigh-n-decide's literal condition grammar
-   wholesale (comparisons, fact paths, `and`/`or`/`not`) for `when` blocks, or
-   keep the v1 subset (globs + equality/contains/in)? Evidence: casbin
-   matches tool + arguments as simple typed pairs; AEGIS matches args with
-   JSON-Schema + regex. Neither needs a general expression language.
-   Arithmetic? Regex?
+3. **Match grammar scope — RESOLVED (2026-10-22).** v1 grammar = the shipped
+   predicate subset plus the `matches` regex operator (stdlib `re`, compiled
+   and syntax-checked at rulebook load; casbin/AEGIS command-guard
+   precedent). Aligning with weigh-n-decide's full condition grammar
+   (composition, arithmetic) is documented as a possible later evolution
+   (see Rulebooks section), not v1.
 4. **Confirm flow** — verdict-only (caller surfaces the human prompt) vs a
    `confirm`/`record` tool that journals decisions to a file for audit
    (store-n-recall-style sqlite or append-only JSONL)? Evidence: AEGIS keeps
