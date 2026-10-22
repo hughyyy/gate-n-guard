@@ -91,7 +91,7 @@ store-n-recall, listen-n-speak, weigh-n-decide).
 
 ## Open items
 
-- Q7 reason templating (static strings vs `{var}` expansion) — under
-  discussion; recommendation is static.
-- Stdio server wiring (`server.py`): tool registration, param schemas,
-  env config binding, `rulebook_ref` attachment, `__main__.py`.
+None — all seven design questions resolved (Q7: static reasons, `{var}`
+documented as a possible extension); the stdio server ships (`server.py`,
+`__main__.py`) and registers `check` / `record` / `audit` / `advise`. See
+`IMPLEMENTATION.md` for the standing manual smoke.

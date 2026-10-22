@@ -41,15 +41,15 @@ src/gate_n_guard/
   openrouter.py      # SHIPPED: OpenRouter chat transport (httpx)
   client.py          # SHIPPED: AdvisoryClient retry/fallback chain
   config.py          # SHIPPED: GATE_N_GUARD_* env parsing
-  server.py          # REMAINING: MCPServer app + tool registration + main()
-  __main__.py        # REMAINING: python -m gate_n_guard
+  server.py          # SHIPPED: MCPServer app + 4 tools + main()
+  __main__.py        # SHIPPED: python -m gate_n_guard
 tests/
   test_rules.py      # matcher: precedence, predicates, errors, determinism
   test_journal.py    # append/read, filters, malformed-line tolerance
   test_loader.py     # sources, ref hashing, attach_ref
   test_advise.py     # deterministic apply, escalation, shapes (fake client)
   test_client.py     # retries, fallback chain, routing (fake transports)
-  test_server.py     # REMAINING: registration + wiring smoke
+  test_server.py     # registration + wiring smoke (injected fakes)
 ```
 
 ## Config (env vars)
@@ -88,21 +88,11 @@ tests/
 
 ## Remaining work
 
-1. **server.py** — MCPServer app; register:
-   - `check(rules, action, situation)` → attach `rulebook_ref` via
-     `loader.attach_ref`.
-   - `record(...)` / `audit(...)` → journal path from
-     `GATE_N_GUARD_JOURNAL`; clear `JournalError` mapping.
-   - `advise(...)` → `loader.resolve_rulebook` + `advise.advise` with a
-     lazily-built `AdvisoryClient` from `load_config()` (client built only
-     when the model path is actually needed — no keys → clear error,
-     no network at startup).
-   - Main model selection: `engine`/`model` per-call params override config.
-2. **__main__.py** — `python -m gate_n_guard` entry.
-3. **test_server.py** — registration smoke with mocked client/journal:
-   servers start and register 4 tools with no keys; `check` fully offline.
-4. Q7 reason templating decision (static vs `{var}`) — pending; static is
-   the recommendation and matches the trace-first philosophy.
+None for v1 scope: all seven design questions are resolved (Q7: static
+reasons) and every module — matcher, journal, loader, advise, engines,
+server, entry point — ships with tests (117). Live advisory calls against
+real keys are the standing manual smoke; benchmark/model defaults can be
+revisited like look-n-see did before release.
 
 ## Verification
 
@@ -114,8 +104,13 @@ tests/
 
 ## Release plan
 
-1. Land Q7 resolution in README (docs-first, same change).
-2. Implement `server.py` + `__main__.py` + `test_server.py`; run suite;
-   `pip install -e .`; smoke `gate-n-guard` registers 4 tools.
-3. Manual advisory smoke with real keys through the harness; then
-   OMP registration example in README is exercised end-to-end.
+1. ~~Q1–Q7 resolved in README (docs-first, same change).~~
+2. ~~Matcher, journal, loader, advise, engines, server, entry point
+   implemented; 117 offline tests.~~
+3. Live stdio smoke passed: 4 tools register, `check` returns deny/confirm/
+   allow-default with `rulebook_ref`, `record`→`audit` round-trip,
+   `advise` deterministic apply, advise-without-keys errors clearly.
+4. Standing: manual advisory smoke with real keys through the harness;
+   OMP registration example in README exercised end-to-end; model default
+   validated (look-n-see did a benchmark sweep before release —
+   worthwhile for `GATE_N_GUARD_MODEL`).

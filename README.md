@@ -9,13 +9,13 @@ collection: [look-n-see](../look-n-see) (vision/OCR), [scrape-n-search](../scrap
 (web), [store-n-recall](../store-n-recall) (memory), [listen-n-speak](../listen-n-speak)
 (speech), [weigh-n-decide](../weigh-n-decide) (decisions), gate-n-guard (policy).
 
-> **Status: in progress** — docs-first: this README is the draft spec, and the
-> open design questions at the bottom gate the surface. Questions 1–6 are
-> resolved and shipped (matcher with both precedence modes, configurable
-> no-match default, `matches` predicate, decision journal, advise with
-> deterministic apply, rulebook source loader); 102 offline tests cover the
-> modules. Question 7 (reason templating) and the stdio server wiring
-> (`server.py`) remain — see `BRIEF.md` and `IMPLEMENTATION.md`.
+> **Status: in progress** — docs-first: this README is the draft spec, and
+> every open design question is now resolved (1–7; Q7: static reasons). The
+> full v1 surface ships: matcher (both precedence modes), decision journal,
+> rulebook loader with `rulebook_ref`, advise with deterministic apply, and
+> the stdio server registering `check` / `record` / `audit` / `advise` —
+> 117 offline tests, live stdio smoke passed. See `BRIEF.md` (requirements)
+> and `IMPLEMENTATION.md` (design, release plan).
 
 ## The idea
 
@@ -117,6 +117,10 @@ Draft semantics:
   composition — `not`/nested `and`/`or` — and arithmetic) is a possible later
   evolution; predicate normalization in the matcher is the single seam where
   that alignment would land, so v1 loses nothing by deferring.
+- **Reasons are static prose in v1** (resolved 2026-10-22): the `reason`
+  string names the boundary for humans; the trace's per-predicate rows are
+  the structured why. `{var}` interpolation is a documented possible
+  extension, not v1.
 - **Precedence** is a rulebook-level mode, `first-match` (default) or
   `strictest`:
   - `first-match` scans rules in order; the **first** matched rule's verdict
@@ -336,8 +340,7 @@ the framing but not the call.
    loaded once at startup. Every response carries `rulebook_ref`
    ({source, sha256}) so the deciding rulebook version is always named in the
    audit trail; failed params error loudly, never silently falling back.
-7. **Reason templating** — static `reason` strings, or `{var}` expansion from
-   the matched action/situation ("…because {arguments.command} touches
-   {situation.env}")? Evidence: AEGIS surfaces "the exact policy that fired
-   and the DSL condition that matched" — the template only has to name the
-   matched rule and its predicates.
+7. **Reason templating — RESOLVED (2026-10-22).** Static `reason` strings
+   only. `{var}` expansion is a documented possible extension (rendering
+   happens at match time, one function) but v1 keeps reasons as human prose
+   and lets the trace's per-predicate rows carry the structured why.

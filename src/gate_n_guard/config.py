@@ -32,6 +32,8 @@ class Config:
     openrouter_base_url: str = DEFAULT_OPENROUTER_URL
     openrouter_site_url: str | None = None
     openrouter_app_name: str | None = None
+    rulebook_path: str | None = None
+    journal_path: str | None = None
 
     @property
     def target(self) -> str:
@@ -98,4 +100,6 @@ def load_config() -> Config:
         openrouter_base_url=os.environ.get("OPENROUTER_BASE_URL", DEFAULT_OPENROUTER_URL),
         openrouter_site_url=os.environ.get("OPENROUTER_SITE_URL") or None,
         openrouter_app_name=os.environ.get("OPENROUTER_APP_NAME") or None,
+        rulebook_path=os.environ.get("GATE_N_GUARD_RULEBOOK") or None,
+        journal_path=os.environ.get("GATE_N_GUARD_JOURNAL") or None,
     )
