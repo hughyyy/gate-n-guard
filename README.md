@@ -50,7 +50,7 @@ reads — decision history for confirm/deny trails, never rule storage.
 
 | Tool | Params | Returns |
 | --- | --- | --- |
-| `check` | `rules` (required: rulebook, inline or ref), `action` (required: tool + arguments), `situation`? (agent id, context facts) | verdict `allow` / `confirm` / `deny`, matched rule(s), per-rule reasons, trace of rules consulted, no-match default applied |
+| `check` | `rules` (inline JSON, `file:<path>` ref, or omitted → `GATE_N_GUARD_RULEBOOK` default), `action` (required: tool + arguments), `situation`? (agent id, context facts) | verdict `allow` / `confirm` / `deny`, matched rule(s), per-rule reasons, trace of rules consulted, no-match default applied, `rulebook_ref` naming the exact rulebook version |
 | `record` | `action` (required), `verdict` (required), `matched`? (rule ids), `rulebook`?, `outcome`?, `actor`?, `note`? | the stored record (id, ts, fields); appends one JSONL line to the journal |
 | `audit` | `limit`? (default 50, max 1000), `since`? / `before`? (ISO-8601), `verdict`?, `outcome`?, `tool`? | `{count, skipped, records[]}` newest-first; malformed lines are skipped and counted, never fatal |
 | `advise` | `rules` (required), `question` (required: interpret / apply / gap), `situation`?, `rule_id`? (interpret only), `mode`? (`auto` default / `model`), `engine`?, `model`? | structured advice per kind; `apply` + `auto` answers from the matcher (deterministic) when rules match, escalating to the model only when nothing matched |
@@ -89,6 +89,14 @@ Canonical v1 shape — an ordered list of rules, each a match plus a verdict:
   ]
 }
 ```
+
+**Rulebook source — RESOLVED (2026-10-22).** The `rules` param wins and is
+accepted as an inline JSON object or a `file:<path>` ref; when it is omitted
+the server loads the `GATE_N_GUARD_RULEBOOK` file once at startup. Every
+response names the exact version that decided via `rulebook_ref`
+(`{source, sha256}`) — an audit always knows which rulebook ran, whether it
+came inline or from disk, and a param that fails (missing file, bad JSON,
+unknown ref) errors loudly and never silently falls back to the default.
 
 Draft semantics:
 
@@ -208,7 +216,7 @@ it.
 | `GATE_N_GUARD_MODEL` | engine-dependent | default model for `advise` |
 | `GATE_N_GUARD_FALLBACKS` | — | fallback chain tried after the default fails |
 | `GATE_N_GUARD_TIMEOUT` / `GATE_N_GUARD_RETRIES` / `GATE_N_GUARD_RETRY_BACKOFF` / `GATE_N_GUARD_MAX_TOKENS` | `60` / `3` / `2.0` / `2048` | advisory call tuning (retries with exponential backoff on 429/5xx/timeouts) |
-| `GATE_N_GUARD_RULEBOOK` | — | optional default rulebook path used when `rules` is omitted |
+| `GATE_N_GUARD_RULEBOOK` | — | optional default rulebook path, loaded once at startup when the `rules` param is omitted |
 | `GATE_N_GUARD_JOURNAL` | — | optional append-only decision journal (JSONL); unset → `record`/`audit` error clearly |
 | `OPENROUTER_API_KEY` / `HF_TOKEN` | — | secrets, env only (same as look-n-see) |
 
@@ -322,11 +330,11 @@ the framing but not the call.
    match, escalating to the model only when nothing matched. `rule_id`
    (interpret only) validates before any model call. Engine pattern mirrors
    look-n-see (openrouter.py / client.py / config.py).
-6. **Rulebook source** — per-call `rules` param only, env-default file
-   (`GATE_N_GUARD_RULEBOOK`), or both with param precedence? How do
-   per-call rulebooks stay auditable when an env file is the fallback?
-   Evidence: AgenticContract pins a file (`.acon`) as its store; the suite's
-   weigh-n-decide passes models per call. 
+6. **Rulebook source — RESOLVED (2026-10-22).** Param wins (inline JSON or
+   `file:<path>` ref); `GATE_N_GUARD_RULEBOOK` env file is the fallback,
+   loaded once at startup. Every response carries `rulebook_ref`
+   ({source, sha256}) so the deciding rulebook version is always named in the
+   audit trail; failed params error loudly, never silently falling back.
 7. **Reason templating** — static `reason` strings, or `{var}` expansion from
    the matched action/situation ("…because {arguments.command} touches
    {situation.env}")? Evidence: AEGIS surfaces "the exact policy that fired
