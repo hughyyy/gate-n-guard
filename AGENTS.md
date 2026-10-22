@@ -39,7 +39,8 @@ implementing.
 - Rule matching may reuse weigh-n-decide's literal condition grammar patterns
   (recursive-descent, no `eval()`, fact paths, error on missing path) — the
   matcher is the one place rule language lives; nothing else parses predicates.
-- Engine pluggability follows look-n-see's pattern: engine param per call,
+- Engine pluggability follows look-n-see's pattern (module trio
+  `openrouter.py` / `client.py` / `config.py`): engine param per call,
   env-configured default, fallback chain, clear error without keys.
 - Config via environment variables (`GATE_N_GUARD_*`) with sane defaults;
   secrets from env only, never hardcoded or committed.
