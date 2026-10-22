@@ -1,0 +1,31 @@
+{
+  "default": "allow",
+  "precedence": "first-match",
+  "rules": [
+    {
+      "id": "no-rm-rf",
+      "when": [
+        {"tool": "bash", "arguments": {"command": {"contains": "rm -rf"}}},
+        {"tool": {"glob": "shell*"}}
+      ],
+      "verdict": "deny",
+      "reason": "recursive deletes are never needed here"
+    },
+    {
+      "id": "prod-deploy-needs-human",
+      "when": [
+        {"tool": {"glob": "deploy*"}, "situation.agent": "ci-bot"}
+      ],
+      "verdict": "confirm",
+      "reason": "production deploys require a human"
+    },
+    {
+      "id": "no-docker-prune",
+      "when": [
+        {"tool": "bash", "arguments": {"command": {"matches": "\\bdocker\\s+system\\s+prune\\b"}}}
+      ],
+      "verdict": "deny",
+      "reason": "docker system prune is destructive; do it by hand"
+    }
+  ]
+}

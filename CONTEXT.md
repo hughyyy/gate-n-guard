@@ -11,16 +11,27 @@ agent and/or situation.
 
 **Rule**:
 One policy statement in a rulebook: a match (predicates over the action and
-situation) plus a verdict and a reason. Rules are ordered; the first rule that
-matches decides.
+situation) plus a verdict and a reason. Rules are ordered; what decides among
+competing matches is the rulebook's `precedence` mode (first-match: the first
+matched rule decides; strictest: the strictest matched verdict wins).
 _Avoid_: policy (the policy is the intent behind rules — say rule or rulebook),
 regulation, directive, guard
 
 **Rulebook**:
 The ordered set of rules evaluated per `check` call, passed inline as JSON or
-referenced by path. Carries the no-match `default` verdict.
+referenced by path. Carries the no-match `default` verdict and the
+`precedence` mode; supplied per call (inline JSON or `file:<path>`) or from
+the `GATE_N_GUARD_RULEBOOK` default.
 _Avoid_: ruleset (a ruleset is any pile of rules; a rulebook is ordered and
 eval-uated), policy, config
+
+**Rulebook ref**:
+The content identity of the rulebook that decided a call —
+`{"source", "sha256"}` — attached to every `check`/`advise` response. Inline
+rulebooks hash canonically; file rulebooks hash the bytes on disk; an audit
+always knows which version ran.
+_Avoid_: fingerprint (informal), hash (unqualified), version (implies manual
+versioning)
 
 **Action**:
 The proposed operation being gated: a tool name plus its arguments.
