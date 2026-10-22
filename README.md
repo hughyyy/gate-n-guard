@@ -116,6 +116,13 @@ Draft semantics:
   block or prompt; the calling agent surfaces the request with the trace as the
   exhibit. How a confirmed action becomes executed is the caller's policy.
 - **deny** — do not proceed; the matched rule and reason name the boundary.
+- **No-match default — configurable, defaults to `allow` (resolved 2026-10-22).**
+  When no rule matches, the rulebook's `default` verdict applies; `default` is
+  rulebook-level config (`allow` / `confirm` / `deny`) and the matcher already
+  accepts all three. `allow`-by-default means policy expresses prohibitions and
+  restrictions, and the trace's `default_applied: true` flags the unexamined
+  action so fail-closed callers can treat it as suspect — a rulebook typo that
+  silently widens access is visible in every trace, not invisible.
 
 `check` is a decision service, not an enforcement point: a client that ignores
 a `deny` is out of scope. Enforcement (intercepting the tool call) is what the
@@ -239,12 +246,10 @@ the framing but not the call.
    optional. Per-rule `priority` was rejected — either mode covers ordering
    needs without the extra knob. Implemented and tested in the matcher; see
    Rulebooks section.
-2. **No-match default** — `allow` (rules express prohibitions), `confirm`
-   (fail-safe: everything unexamined needs a human), or `deny` (fail-closed)?
-   Evidence: AEGIS is fail-safe by default (missing config = block); a
-   decision service with an `audit_only` posture also exists
-   (AgenticContract). Recommendation: rulebook-level `default` field,
-   default `allow`, so each deployment picks its posture.
+2. **No-match default — RESOLVED (2026-10-22).** Rulebook-level `default`
+   field, `allow` by default, `confirm`/`deny` selectable per rulebook
+   (AEGIS-style fail-safe posture remains a configuration choice, not the
+   shipping default). Matcher and tests already cover all three values.
 3. **Match grammar scope** — reuse weigh-n-decide's literal condition grammar
    wholesale (comparisons, fact paths, `and`/`or`/`not`) for `when` blocks, or
    keep the v1 subset (globs + equality/contains/in)? Evidence: casbin
