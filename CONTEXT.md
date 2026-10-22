@@ -79,3 +79,11 @@ The deterministic module that evaluates rules over action + situation. No
 model, no network; same input → same verdict and trace.
 _Avoid_: engine (reserved for advisory engines), evaluator, kernel (taken by
 weigh-n-decide)
+
+**Precedence**:
+The rulebook-level setting deciding how competing rule matches combine:
+`first-match` (ordered scan; the first matched rule's verdict decides, later
+rules are not consulted) or `strictest` (every rule is consulted; the
+strictest matched verdict wins — deny > confirm > allow).
+_Avoid_: priority (a per-rule knob gate-n-guard does not have), order (that is
+only the first-match mode), mode (vague)

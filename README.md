@@ -9,10 +9,12 @@ collection: [look-n-see](../look-n-see) (vision/OCR), [scrape-n-search](../scrap
 (web), [store-n-recall](../store-n-recall) (memory), [listen-n-speak](../listen-n-speak)
 (speech), [weigh-n-decide](../weigh-n-decide) (decisions), gate-n-guard (policy).
 
-> **Status: planned** — docs-first: this README is the draft spec, and the open
-> design questions at the bottom gate the final surface. Implementation starts
-> after they are resolved; then `BRIEF.md` (requirements) and
-> `IMPLEMENTATION.md` (design + release plan) are added, like look-n-see.
+> **Status: in progress** — docs-first: this README is the draft spec, and the
+> open design questions at the bottom gate the tool surface. Question 1
+> (precedence) is resolved — both modes ship behind a rulebook-level
+> `precedence` field — and the deterministic matcher is implemented and
+> tested (`src/gate_n_guard/rules.py`). The remaining questions gate the MCP
+> surface (`check`/`advise` wiring), not the matcher.
 
 ## The idea
 
@@ -59,6 +61,7 @@ Canonical v1 shape — an ordered list of rules, each a match plus a verdict:
 ```json
 {
   "default": "allow",
+  "precedence": "first-match",
   "rules": [
     {
       "id": "no-rm-rf",
@@ -91,8 +94,16 @@ Draft semantics:
   a deliberate subset of weigh-n-decide's literal condition grammar, evaluated
   the same deterministic way (no `eval()`, missing fact path is an error, not
   a silent false).
-- First matching rule decides the verdict; rules later in the list are not
-  consulted (documented, ordered exceptions: put specific rules first).
+- **Precedence** is a rulebook-level mode, `first-match` (default) or
+  `strictest`:
+  - `first-match` scans rules in order; the **first** matched rule's verdict
+    decides and later rules are not consulted (ordered exceptions: put
+    specific rules first — the casbin model).
+  - `strictest` evaluates **every** rule; the strictest matched verdict wins
+    (`deny` > `confirm` > `allow`), so rule order can never loosen a deny
+    (the AEGIS fail-safe model).
+  Both modes run in the same deterministic matcher; the trace names the mode
+  and shows exactly which rules were consulted and which matched.
 - No rule matches → the rulebook's `default` verdict applies (`allow`
   default; `rules.default` may set `confirm` or `deny`).
 - Every consulted rule — matched or not — appears in the trace with its
@@ -223,12 +234,11 @@ advisory), with no gateway, SDK patching, or dashboard.
 Evidence from `research/approaches.md` is cited where the landscape settles
 the framing but not the call.
 
-1. **Precedence** — first-match-wins with ordered rules (casbin) vs
-   strictest-wins where any `deny` beats later `allow`s (AEGIS)
-   vs per-rule `priority`? Evidence: casbin = "first rule that matches
-   decides" (ordered exceptions; predictable trace); AEGIS = "strictest
-   signal wins", fail-safe (rule order cannot loosen a deny).
-   Recommendation: first-match-wins, rules ordered.
+1. **Precedence — RESOLVED (2026-10-22).** Both modes ship: rulebook-level
+   `precedence` field, `first-match` (casbin) by default, `strictest` (AEGIS)
+   optional. Per-rule `priority` was rejected — either mode covers ordering
+   needs without the extra knob. Implemented and tested in the matcher; see
+   Rulebooks section.
 2. **No-match default** — `allow` (rules express prohibitions), `confirm`
    (fail-safe: everything unexamined needs a human), or `deny` (fail-closed)?
    Evidence: AEGIS is fail-safe by default (missing config = block); a
