@@ -183,7 +183,9 @@ python3 -m venv .venv
 
 Primary sources fetched via scrape-n-search MCP; this positions the server
 against what exists so the surface borrows proven semantics and skips what is
-already built.
+already built. The full architecture comparison (five ways a gate can work,
+scored on five metrics, with evidence) lives in
+[research/approaches.md](research/approaches.md).
 
 - **MCP authorization** is OAuth 2.1 transport authN (RFC 8707 resource
   indicators, audience-bound tokens, no passthrough) —
