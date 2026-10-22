@@ -9,13 +9,15 @@ collection: [look-n-see](../look-n-see) (vision/OCR), [scrape-n-search](../scrap
 (web), [store-n-recall](../store-n-recall) (memory), [listen-n-speak](../listen-n-speak)
 (speech), [weigh-n-decide](../weigh-n-decide) (decisions), gate-n-guard (policy).
 
-> **Status: in progress** — docs-first: this README is the draft spec, and
-> every open design question is now resolved (1–7; Q7: static reasons). The
-> full v1 surface ships: matcher (both precedence modes), decision journal,
-> rulebook loader with `rulebook_ref`, advise with deterministic apply, and
-> the stdio server registering `check` / `record` / `audit` / `advise` —
-> 117 offline tests, live stdio smoke passed. See `BRIEF.md` (requirements)
-> and `IMPLEMENTATION.md` (design, release plan).
+> **Status: v1 shipped and live-tested** — all seven design questions
+> resolved (1–7; Q7: static reasons). The full surface ships: matcher (both
+> precedence modes), decision journal, rulebook loader with `rulebook_ref`,
+> advise with deterministic apply, and the stdio server registering `check` /
+> `record` / `audit` / `advise` — 120 offline tests, live stdio smoke passed,
+> and a direct test campaign through the registered OMP server (~45 calls:
+> verdict matrix, precedence modes, journal round-trip and filters, advise
+> modes, error paths, determinism). See `BRIEF.md` (requirements) and
+> `IMPLEMENTATION.md` (design, release plan).
 
 ## The idea
 

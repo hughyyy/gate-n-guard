@@ -22,43 +22,54 @@ weigh-n-decide, gate-n-guard).
   `matches` regex; append-only decision journal; one advise tool with
   `mode auto|model`; rulebook source param-wins with env-default file;
   static reasons (`{var}` documented as possible extension).
-- **Research**: `research/approaches.md` — five gate architectures (inline
-  decision service, proxy/gateway, SDK instrumentation, MCP wrapper proxy,
-  agent-native hooks) scored on five metrics with evidence; gate-n-guard is
-  approach A.
 
-## Current state (verified 2026-10-22)
+## Current state (verified 2026-10-23)
 
-- **117 tests pass** (`.venv/bin/python -m unittest discover -s tests -q`,
+- **120 tests pass** (`.venv/bin/python -m unittest discover -s tests -q`,
   zero dev deps): matcher (both precedence modes, predicates, errors,
   determinism), journal (append/filters/malformed-line tolerance), loader
   (sources, ref hashing), advise (deterministic apply, escalation, shapes),
-  client (retries, fallback chain, routing), server (registration +
-  wiring with injected fakes).
-- **Live stdio smoke passed** over a real JSON-RPC handshake (initialize →
-  tools/list → calls): `check` deny/confirm/allow-default with
-  `rulebook_ref` (`file:` source), `record`→`audit` round-trip,
-  `advise` apply-auto → deterministic, `advise` interpret without keys →
-  clear `InferenceError`, server alive throughout. Artifacts at
-  `/tmp/gn-smoke/`.
-- **Registered with Oh My Pi** for direct testing (added to
-  `~/.omp/agent/mcp.json`, mirroring look-n-see's entry):
+  client (retries, fallback chain, routing), server (registration + wiring
+  with injected fakes). Three added 2026-10-23 defend the prompt fixes below.
+- **Full live test campaign through the registered OMP server (~45 calls,
+  2026-10-23)**: all four tools exercised. Highlights beyond the standing
+  smoke: `strictest` mode deny-dominance and all-consulted trace; type-strict
+  equality (`true != 1`); `in`/`gt`/`lte`/nested `arguments.<key>`/
+  `matches`; left-to-right entry short-circuit proven via missing-path
+  errors; determinism (identical payload twice → byte-identical output incl.
+  same sha256); `file:` ref sha256 equals `sha256sum` of the file;
+  newest-first audit proven with 2 records; malformed journal line skipped
+  and counted; every invalid-input path returns a structured
+  `{"error": ...}`, never a traceback.
+- **Two prompt bugs found in that campaign and fixed (same day)**:
+  1. `_build_messages` serialized rules as dataclass reprs
+     (`Predicate(path=..., compiled=None)` leaked into prompts and the model
+     echoed them into `reading`). Now renders `[{path, operator, value}]`.
+  2. The whole-rulebook `interpret` schema sketch was garbled
+     (`"forbids, edge_cases, confidence}`); now a complete shape string.
+  Plus: `check(rules="")` now errors loudly (was silently using the default
+  rulebook — against the loader's param-wins contract).
+- **Fresh-subprocess stdio smoke re-run after the fixes (keyless env)**:
+  tools register, deny/confirm/allow-default, `record`→`audit` round-trip,
+  `advise` deterministic, advise-without-keys → clear
+  `OPENROUTER_API_KEY is not set` error, server alive. This closed the one
+  smoke item the earlier session could not verify live.
+- **Live advisory calls with real keys** (through OMP, 2026-10-23):
+  `interpret` single rule + whole rulebook, `apply` `mode: model`,
+  `apply` auto escalation, `gap` — all returned valid strict-JSON shapes.
+- **Registered with Oh My Pi** for direct testing (`~/.omp/agent/mcp.json`,
+  mirroring look-n-see's entry):
   - `command`: `/mnt/shared/Source/gate-n-guard/.venv/bin/gate-n-guard`
   - `env`: `GATE_N_GUARD_RULEBOOK` → `examples/rulebook.json`,
     `GATE_N_GUARD_JOURNAL` → `var/journal.jsonl`,
     `OPENROUTER_API_KEY` / `HF_TOKEN` via `!omp token openrouter` /
     `!omp token huggingface`
   - `timeout`: 120000 (advise needs the raised timeout)
-  - **Restart OMP to pick up the registration — no config change after.**
-- Not pushed to any remote (local repo only, like the rest of the
-  collection's new servers); nothing published to PyPI.
-- Git history (HEAD `24440bf`): `97d4463` (docs-first scaffold) →
-  `421ade0` (approach comparison research) → `13822d4` (evidence in open
-  questions) → `217ec53` (matcher: both precedence modes) → `c9100d3`
-  (default posture) → `89d7a35` (`matches` operator) → `4ac34c6` (journal +
-  record/audit) → `75c769f` (advise + engine ports) → `d9fd660` (rulebook
-  loader + refs) → `d7efee8` (BRIEF/IMPLEMENTATION) → `24440bf` (stdio
-  server + entry point).
+- **Remote**: pushed to `https://github.com/hughyyy/gate-n-guard.git`
+  (empty repo pre-created to match the sibling naming; the other four
+  siblings live at `github.com/hughyyy/<name>.git`, weigh-n-decide is the
+  one remaining collection repo without a remote).
+- Not published to PyPI.
 
 ## How to run
 
@@ -68,12 +79,12 @@ cd /mnt/shared/Source/gate-n-guard
 .venv/bin/gate-n-guard                               # stdio MCP server
 ```
 
-### Post-restart smoke checklist (direct, through OMP)
+### Standing smoke checklist (direct, through OMP)
 
 1. `tools/list` → exactly `advise`, `audit`, `check`, `record`.
 2. `check` with no `rules` (default rulebook from env):
-   - `action={"tool": "bash", "arguments": {"command": "rm -rf x"}}` → `deny`,
-     `rulebook_ref.source` = `file:.../examples/rulebook.json`.
+   - `action={"tool": "bash", "arguments": {"command": "rm -rf x"}}` →
+     `deny`, `rulebook_ref.source` = `file:.../examples/rulebook.json`.
    - `action={"tool": "deploy", ...}, situation={"agent": "ci-bot"}` →
      `confirm`.
    - `action={"tool": "read", ...}` → `allow` with `default_applied: true`.
@@ -100,3 +111,10 @@ cd /mnt/shared/Source/gate-n-guard
   extension (render-at-match seam).
 - Advise model calls are strict-JSON contracts; a model that stops returning
   valid JSON surfaces a clear `AdviseError`, not a crash.
+- Test-grammar footgun worth knowing when writing rulebooks: nested argument
+  predicates are `{"arguments": {"<key>": <pred>}}` (expanded by
+  `_arguments_predicates`), NOT dotted `"arguments.<key>"` — the dotted form
+  is only for `situation.<path>`. Error messages name this.
+- The test campaign's journal (`var/journal.jsonl` with 2 smoke records +
+  1 injected malformed line) was removed after testing; the journal is
+  append-only, so deletion was the only clean reset.

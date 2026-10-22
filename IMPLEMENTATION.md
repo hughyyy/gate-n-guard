@@ -70,7 +70,7 @@ tests/
 | `HF_ENDPOINT` | — | dedicated HF inference endpoint (pins HF transport) |
 | `OPENROUTER_BASE_URL` / `OPENROUTER_SITE_URL` / `OPENROUTER_APP_NAME` | defaults | OpenRouter endpoint + optional referer/title headers |
 
-## Modules shipped (tested, 102 tests)
+## Modules shipped (tested, 120 tests)
 
 - **rules.py** — `load_rulebook` (validation), `check` envelope:
   `{verdict, precedence, matched[], default_applied, trace}`; both
@@ -90,9 +90,12 @@ tests/
 
 None for v1 scope: all seven design questions are resolved (Q7: static
 reasons) and every module — matcher, journal, loader, advise, engines,
-server, entry point — ships with tests (117). Live advisory calls against
-real keys are the standing manual smoke; benchmark/model defaults can be
-revisited like look-n-see did before release.
+server, entry point — ships with tests (120). Live advisory calls with
+real keys ran through the registered OMP server (2026-10-23: interpret
+single/whole, apply model-mode, apply auto escalation, gap), and the
+without-keys error path was live-verified against a fresh keyless
+subprocess. Standing: benchmark `GATE_N_GUARD_MODEL` for advice
+quality/latency like look-n-see did before release.
 
 ## Verification
 
@@ -110,7 +113,8 @@ revisited like look-n-see did before release.
 3. Live stdio smoke passed: 4 tools register, `check` returns deny/confirm/
    allow-default with `rulebook_ref`, `record`→`audit` round-trip,
    `advise` deterministic apply, advise-without-keys errors clearly.
-4. Standing: manual advisory smoke with real keys through the harness;
-   OMP registration example in README exercised end-to-end; model default
-   validated (look-n-see did a benchmark sweep before release —
-   worthwhile for `GATE_N_GUARD_MODEL`).
+4. Advisory smoke with real keys done (2026-10-23, via the registered OMP
+   server: interpret single/whole, apply model-mode, apply auto
+   escalation, gap; without-keys error verified against a fresh keyless
+   subprocess). Standing: benchmark `GATE_N_GUARD_MODEL` (look-n-see did
+   a sweep before release).

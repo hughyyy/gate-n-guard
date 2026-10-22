@@ -73,7 +73,9 @@ _Avoid_: log (unstructured), database, store (that is store-n-recall's term)
 
 **Advice**:
 The structured output of `advise`: applicable rules, their interpretations,
-caveats, suggestions. Never a verdict.
+caveats, suggestions. Never a verdict — the model's word decides nothing.
+The one exception is the deterministic apply mode, which carries the
+matcher's verdict verbatim (it is a check run, not model output).
 _Avoid_: recommendation (implies the caller should act on it), suggestion,
 analysis (too broad)
 
