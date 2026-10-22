@@ -57,6 +57,18 @@ weigh-n-decide, gate-n-guard).
 - **Live advisory calls with real keys** (through OMP, 2026-10-23):
   `interpret` single rule + whole rulebook, `apply` `mode: model`,
   `apply` auto escalation, `gap` — all returned valid strict-JSON shapes.
+- **Post-restart positive verification (2026-10-23)**: the current OMP session
+  (`omp` pid, child `gate-n-guard` pid started 02:03:04) runs post-fix code —
+  live `advise` prompts now carry structured rows (`[{"path","operator",
+  "value"}]` echoed back in `reading`, no `Predicate(`/`compiled=`),
+  `strictest` deny-dominance with every rule consulted, identical `check`
+  payload twice → byte-identical output incl. sha256, `gap` model call,
+  `record`→`audit` round-trip.
+  Harness note: OMP strips empty-string tool args before dispatch, so
+  `rules: ""` and `audit verdict: ""` both behaved as omitted; the empty-string
+  guard was verified at the protocol boundary instead (raw stdio client →
+  `rules string must be a 'file:<path>' ref ...`, and a live `" "` reaches the
+  same error).
 - **Registered with Oh My Pi** for direct testing (`~/.omp/agent/mcp.json`,
   mirroring look-n-see's entry):
   - `command`: `/mnt/shared/Source/gate-n-guard/.venv/bin/gate-n-guard`
