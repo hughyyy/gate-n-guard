@@ -220,26 +220,46 @@ advisory), with no gateway, SDK patching, or dashboard.
 
 ## Open design questions (gating the spec)
 
+Evidence from `research/approaches.md` is cited where the landscape settles
+the framing but not the call.
+
 1. **Precedence** — first-match-wins with ordered rules (casbin) vs
    strictest-wins where any `deny` beats later `allow`s (AEGIS)
-   vs per-rule `priority`? Recommendation: first-match-wins, rules ordered,
-   since it is the easiest to predict and trace.
+   vs per-rule `priority`? Evidence: casbin = "first rule that matches
+   decides" (ordered exceptions; predictable trace); AEGIS = "strictest
+   signal wins", fail-safe (rule order cannot loosen a deny).
+   Recommendation: first-match-wins, rules ordered.
 2. **No-match default** — `allow` (rules express prohibitions), `confirm`
    (fail-safe: everything unexamined needs a human), or `deny` (fail-closed)?
-   Recommendation: rulebook-level `default` field, default `allow`, so each
-   deployment picks its posture.
+   Evidence: AEGIS is fail-safe by default (missing config = block); a
+   decision service with an `audit_only` posture also exists
+   (AgenticContract). Recommendation: rulebook-level `default` field,
+   default `allow`, so each deployment picks its posture.
 3. **Match grammar scope** — reuse weigh-n-decide's literal condition grammar
    wholesale (comparisons, fact paths, `and`/`or`/`not`) for `when` blocks, or
-   keep the v1 subset (globs + equality/contains/in)? Arithmetic? Regex?
+   keep the v1 subset (globs + equality/contains/in)? Evidence: casbin
+   matches tool + arguments as simple typed pairs; AEGIS matches args with
+   JSON-Schema + regex. Neither needs a general expression language.
+   Arithmetic? Regex?
 4. **Confirm flow** — verdict-only (caller surfaces the human prompt) vs a
    `confirm`/`record` tool that journals decisions to a file for audit
-   (store-n-recall-style sqlite or append-only JSONL)? Stateless v1?
+   (store-n-recall-style sqlite or append-only JSONL)? Evidence: AEGIS keeps
+   approvals as a queue + dashboard (service shape — out of scope);
+   AgenticContract has an `approval_request`/`approval_decide` lifecycle in
+   its store. Stateless v1?
 5. **Advise surface** — one `advise` tool with a `question` enum, or separate
    tools (`interpret_rule`, `applicable_rules`, `rule_gap`)? Does
    "applicable rules" have a deterministic mode that skips the model entirely?
+   Evidence: AgenticContract exposes `policy_check` (deterministic) separate
+   from LLM-facing tools; nothing in the landscape makes applicability
+   model-only.
 6. **Rulebook source** — per-call `rules` param only, env-default file
    (`GATE_N_GUARD_RULEBOOK`), or both with param precedence? How do
    per-call rulebooks stay auditable when an env file is the fallback?
+   Evidence: AgenticContract pins a file (`.acon`) as its store; the suite's
+   weigh-n-decide passes models per call. 
 7. **Reason templating** — static `reason` strings, or `{var}` expansion from
    the matched action/situation ("…because {arguments.command} touches
-   {situation.env}")?
+   {situation.env}")? Evidence: AEGIS surfaces "the exact policy that fired
+   and the DSL condition that matched" — the template only has to name the
+   matched rule and its predicates.
