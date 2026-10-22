@@ -58,17 +58,10 @@ weigh-n-decide, gate-n-guard).
   `interpret` single rule + whole rulebook, `apply` `mode: model`,
   `apply` auto escalation, `gap` — all returned valid strict-JSON shapes.
 - **Post-restart positive verification (2026-10-23)**: the current OMP session
-  (`omp` pid, child `gate-n-guard` pid started 02:03:04) runs post-fix code —
-  live `advise` prompts now carry structured rows (`[{"path","operator",
-  "value"}]` echoed back in `reading`, no `Predicate(`/`compiled=`),
-  `strictest` deny-dominance with every rule consulted, identical `check`
-  payload twice → byte-identical output incl. sha256, `gap` model call,
-  `record`→`audit` round-trip.
-  Harness note: OMP strips empty-string tool args before dispatch, so
-  `rules: ""` and `audit verdict: ""` both behaved as omitted; the empty-string
-  guard was verified at the protocol boundary instead (raw stdio client →
-  `rules string must be a 'file:<path>' ref ...`, and a live `" "` reaches the
-  same error).
+  runs post-fix code (its `gate-n-guard` child started after the 01:57:41
+  edits): live prompts carry structured predicate rows, `strictest`,
+  determinism, `gap`, `record`→`audit` all re-checked. Call-by-call log in
+  *Post-restart verification log* below.
 - **Registered with Oh My Pi** for direct testing (`~/.omp/agent/mcp.json`,
   mirroring look-n-see's entry):
   - `command`: `/mnt/shared/Source/gate-n-guard/.venv/bin/gate-n-guard`
@@ -107,6 +100,66 @@ cd /mnt/shared/Source/gate-n-guard
    `rule_id` echoed. Without keys it errors clearly (that is correct).
 6. Journal file: `var/journal.jsonl` (append-only; audit is the only reader).
 
+## Post-restart verification log (2026-10-23)
+
+Purpose: positively confirm the restarted server executes the post-fix source
+(`0ef8cc7` advise prompt rendering, `62f1db7` empty-string `rules` guard).
+The OMP session was restarted first, so the live rows below ran against a
+process created after the edits: `omp` pid 484193 → its `gate-n-guard` child
+started 02:03:04, source files edited 01:57:41.
+
+### Offline gate
+
+| Check | Result |
+|---|---|
+| `.venv/bin/python -m unittest discover -s tests -q` | `Ran 120 tests` — `OK` |
+| `python -m compileall -q src/gate_n_guard` | clean |
+| `python -c "import gate_n_guard.server"` | imports, resolves to the repo `src/` |
+
+### Protocol level — fresh subprocess, keyless env, real stdio JSON-RPC
+
+Driven directly (`subprocess.Popen([".venv/bin/gate-n-guard"])`, then
+`initialize` → `notifications/initialized` → `tools/list` → `tools/call`),
+with `GATE_N_GUARD_RULEBOOK=examples/rulebook.json` and a throwaway journal;
+`OPENROUTER_API_KEY`/`HF_TOKEN` unset on purpose.
+
+| Call | Observed |
+|---|---|
+| `tools/list` | exactly `advise`, `audit`, `check`, `record` |
+| `check` `rules=""` | `{"error": "rules string must be a 'file:<path>' ref or inline JSON, got ''"}` — proves the `62f1db7` guard |
+| `check` `rules=null` and `rules` omitted | `deny` via `no-rm-rf` (default rulebook from env) |
+| `check` `{"tool": "deploy"}` + `situation.agent=ci-bot` | `confirm` via `prod-deploy-needs-human` |
+| `check` `{"tool": "read"}` | `allow`, `default_applied: true` |
+| `advise` apply + rm-rf action | `mode: deterministic`, `verdict: deny` |
+| `advise` interpret, no keys | `advisory model call failed (openrouter:...): OpenRouter model requested but OPENROUTER_API_KEY is not set` — clear error, correct |
+| `record` then `audit` | record stored with id/ts, `count: 1` |
+| server lifecycle | exit 0, empty stderr |
+
+### Live through the registered OMP server (real keys in env)
+
+| Call | Observed |
+|---|---|
+| `advise` apply `mode: model` | `reading` = `[{"path": "tool", "operator": "eq", "value": "bash"}, {"path": "arguments.command", "operator": "contains", "value": "rm -rf"}]` — structured rows, no `Predicate(`/`compiled=` anywhere: the `0ef8cc7` fix, and the one result old code could not produce |
+| `advise` interpret (whole rulebook) | complete shape — all 3 rules, every field (`meaning`, `permits`, `requires`, `forbids`, `edge_cases`, `confidence`), `mode: model` |
+| `advise` gap | `{"coverage": "adequate", "gaps": []}`, `mode: model` |
+| `check` inline `strictest` 3-rule book, bash/rm action | `deny` wins over `confirm`+`allow`; `matched` = confirm+deny with correct `winner` flags; trace carries all three rules |
+| `check` identical payload ×2 (`file:` ref, docker prune) | byte-identical output, same `sha256` |
+| `check` `rules=42` | `{"error": "rules must be a rulebook object or 'file:<path>' ref, got int"}` |
+| `check` `rules=" "` | `{"error": "rules string must be a 'file:<path>' ref or inline JSON, got ' '"}` |
+| `record` → `audit` | record `ed53a50a...` stored; `audit` returns `count: 1` |
+| `rulebook_ref.sha256` | `0c84fc32...c172` — equals `sha256sum examples/rulebook.json` |
+
+### Findings
+
+- **OMP strips empty-string tool args before dispatch.** Live `check rules=""`
+  returned the default rulebook's verdict and live `audit verdict=""` returned
+  records instead of the `JournalError` the code raises; at the protocol level
+  both `""` and `" "` reach the server and error as shown above, and
+  `read_journal(verdict="")` raises
+  `audit: verdict must be one of ('allow', 'confirm', 'deny'), got ''`. The
+  guard is correct; it is simply unreachable through this harness.
+- **The sample rulebook is an OR trap** — see Known issues below.
+
 ## Known issues / notes
 
 - **System python has no pip** — always use the repo `.venv` (editable
@@ -127,6 +180,17 @@ cd /mnt/shared/Source/gate-n-guard
   predicates are `{"arguments": {"<key>": <pred>}}` (expanded by
   `_arguments_predicates`), NOT dotted `"arguments.<key>"` — the dotted form
   is only for `situation.<path>`. Error messages name this.
-- The test campaign's journal (`var/journal.jsonl` with 2 smoke records +
-  1 injected malformed line) was removed after testing; the journal is
-  append-only, so deletion was the only clean reset.
+- **The sample rulebook teaches the OR trap.** `examples/rulebook.json` (and
+  the README copy at "Rulebooks") puts `{"tool": {"glob": "shell*"}}` as a
+  second `when` entry of `no-rm-rf`. Entries are OR-joined (`rules.py`:
+  "any-entry semantics"), so that rule denies *every* `shell*` tool with the
+  reason "recursive deletes are never needed here" — the live `interpret` call
+  read it correctly as "or" and exposed it. Not changed yet: fixing it is
+  either two rules with their own reasons (keeps the OR demonstration, makes
+  the sample honest) or dropping the second entry. The README section and
+  `examples/rulebook.json` must change together; the sha in `rulebook_ref`
+  changes with them.
+- **The journal currently holds one record** (`var/journal.jsonl`, the
+  `record` call in the verification log, actor `verification-session`). The
+  earlier campaign's journal was removed after that session's testing — the
+  journal is append-only, so deletion is the only clean reset.
