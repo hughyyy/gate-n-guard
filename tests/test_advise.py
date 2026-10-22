@@ -146,6 +146,23 @@ class ParametersAndExtractionTests(unittest.TestCase):
         self.assertIn('"verdict": "confirm"', user)
         self.assertIn("prod-deploy", user)
 
+    def test_prompt_predicates_structured_not_reprs(self):
+        client = FakeClient('{"summary": "s", "applicable": []}')
+        advise(BOOK, ACTION_RM, SITUATION, question="apply", mode="model", client=client)
+        user = client.calls[0][0][1]["content"]
+        self.assertNotIn("Predicate(", user)
+        self.assertNotIn("compiled=", user)
+        self.assertIn('"path": "arguments.command"', user)
+        self.assertIn('"operator": "contains"', user)
+
+    def test_interpret_whole_rulebook_prompt_schema_complete(self):
+        client = FakeClient('{"interpretations": []}')
+        advise(BOOK, ACTION_READ, SITUATION, question="interpret", client=client)
+        user = client.calls[0][0][1]["content"]
+        self.assertIn('"forbids": [str]', user)
+        self.assertIn('"edge_cases": [str]', user)
+        self.assertNotIn("forbids,", user)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -113,11 +113,14 @@ def _build_messages(
         "default": rulebook.default,
         "precedence": rulebook.precedence,
         "rules": [
-            {"id": rule.id, "when": list(rule.entries), "verdict": rule.verdict,
+            {"id": rule.id,
+             "when": [[{"path": p.path, "operator": p.operator, "value": p.value}
+                       for p in entry] for entry in rule.entries],
+             "verdict": rule.verdict,
              "reason": rule.reason}
             for rule in rulebook.rules
         ],
-    }, ensure_ascii=False, default=str)
+    }, ensure_ascii=False)
     context = {
         "action": action,
         "situation": situation or {},
@@ -132,8 +135,9 @@ def _build_messages(
                 '{"meaning": str, "permits": [str], "requires": [str], '
                 '"forbids": [str], "edge_cases": [str], "confidence": 0..1}'
                 if rule_id
-                else '{"interpretations": [{rule_id, meaning, permits, requires, '
-                     '"forbids, edge_cases, confidence}...]}'
+                else '{"interpretations": [{"rule_id": str, "meaning": str, '
+                     '"permits": [str], "requires": [str], "forbids": [str], '
+                     '"edge_cases": [str], "confidence": 0..1}]}'
             )
         ),
         "apply": (
