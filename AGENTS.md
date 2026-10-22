@@ -67,12 +67,16 @@ implementing.
 ## Verification
 
 - `python -m compileall` / import smoke test after changes.
-- `python -m unittest discover -s tests -q` — the offline suite. The matcher
-  is fully unit-testable: precedence, default verdict, missing-path errors,
-  glob/contains/in predicates, trace shape, and determinism (same input →
-  same verdict) are test targets.
-- Server must start and register tools with no keys present
-  (`check` fully functional offline; `advise` errors clearly on use, no
-  network at startup).
-- Live advisory calls are manual smoke (a real MCP call through the harness),
-  not part of the suite.
+- `python -m unittest discover -s tests -q` — the offline suite. Coverage:
+  the matcher (both precedence modes, predicates incl. `matches`,
+  validation, missing-path errors, determinism), the journal (append,
+  filters, malformed-line tolerance), the rulebook loader (source
+  precedence, ref hashing, `attach_ref`), the advise orchestration (fake
+  client), and the engine client (fake transports: retries, fallback chain,
+  routing). No network, no keys.
+- Server must start and register all four tools with no keys present and no
+  journal configured (`check` fully functional offline; `record`/`audit`
+  error clearly on use; `advise` builds its client lazily — clear error on
+  use, no network at startup).
+- Live advisory calls are manual smoke (a real MCP call through the
+  harness), not part of the suite.

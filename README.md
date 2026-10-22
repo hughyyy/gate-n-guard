@@ -10,11 +10,12 @@ collection: [look-n-see](../look-n-see) (vision/OCR), [scrape-n-search](../scrap
 (speech), [weigh-n-decide](../weigh-n-decide) (decisions), gate-n-guard (policy).
 
 > **Status: in progress** — docs-first: this README is the draft spec, and the
-> open design questions at the bottom gate the tool surface. Question 1
-> (precedence) is resolved — both modes ship behind a rulebook-level
-> `precedence` field — and the deterministic matcher is implemented and
-> tested (`src/gate_n_guard/rules.py`). The remaining questions gate the MCP
-> surface (`check`/`advise` wiring), not the matcher.
+> open design questions at the bottom gate the surface. Questions 1–6 are
+> resolved and shipped (matcher with both precedence modes, configurable
+> no-match default, `matches` predicate, decision journal, advise with
+> deterministic apply, rulebook source loader); 102 offline tests cover the
+> modules. Question 7 (reason templating) and the stdio server wiring
+> (`server.py`) remain — see `BRIEF.md` and `IMPLEMENTATION.md`.
 
 ## The idea
 
