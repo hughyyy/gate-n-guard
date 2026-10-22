@@ -65,13 +65,21 @@ weigh-n-decide, gate-n-guard).
   determinism, `gap`, `record`→`audit` all re-checked. Call-by-call log in
   *Post-restart verification log* below.
 - **Registered with Oh My Pi** for direct testing (`~/.omp/agent/mcp.json`,
-  mirroring look-n-see's entry):
+  mirroring look-n-see's entry) — **currently disabled**:
   - `command`: `/mnt/shared/Source/gate-n-guard/.venv/bin/gate-n-guard`
   - `env`: `GATE_N_GUARD_RULEBOOK` → `examples/rulebook.json`,
     `GATE_N_GUARD_JOURNAL` → `var/journal.jsonl`,
     `OPENROUTER_API_KEY` / `HF_TOKEN` via `!omp token openrouter` /
     `!omp token huggingface`
   - `timeout`: 120000 (advise needs the raised timeout)
+  - `enabled: false` — set 2026-10-23 after the advertisement fix, using the
+    OMP-native flag (schema `serverBase.enabled`). The entry, its env, and its
+    tokens stay in place, so re-enabling is flipping that boolean back to
+    `true` (or deleting the key) and restarting OMP; `disabledServers:
+    ["gate-n-guard"]` in the same file is the higher-precedence alternative.
+    While disabled the four tools are absent from every OMP session, so the
+    standing smoke checklist below has to run against a direct stdio
+    subprocess until it is turned back on.
 - **Remote**: pushed to `https://github.com/hughyyy/gate-n-guard.git`
   (empty repo pre-created to match the sibling naming; the other four
   siblings live at `github.com/hughyyy/<name>.git`, weigh-n-decide is the
@@ -86,7 +94,13 @@ cd /mnt/shared/Source/gate-n-guard
 .venv/bin/gate-n-guard                               # stdio MCP server
 ```
 
-### Standing smoke checklist (direct, through OMP)
+### Standing smoke checklist (through OMP when enabled, else direct stdio)
+
+The OMP entry is currently `enabled: false`, and OMP reads `mcp.json` at
+startup — so the running session keeps its tools until it restarts, and new
+sessions will not have them. Run this checklist either after re-enabling, or
+against a direct subprocess (`subprocess.Popen([".venv/bin/gate-n-guard"])`
+plus `initialize` → `notifications/initialized` → `tools/list` → `tools/call`).
 
 1. `tools/list` → exactly `advise`, `audit`, `check`, `record`.
 2. `check` with no `rules` (default rulebook from env):
