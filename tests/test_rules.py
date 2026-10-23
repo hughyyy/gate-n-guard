@@ -456,6 +456,15 @@ class RulebookValidationTests(unittest.TestCase):
         )
 
 
+
+    def test_empty_situation_path_is_not_a_predicate_key(self):
+        # "situation." names no fact, so it is an unknown key rather than a
+        # predicate on an empty path
+        self.assertInvalid(
+            {"rules": [{"id": "r", "when": [{"situation.": "ci-bot"}], "verdict": "deny"}]},
+            "unknown predicate key",
+        )
+
 class ActionValidationTests(unittest.TestCase):
     def setUp(self):
         self.rbook = book([rule("deny-bash", [{"tool": "bash"}], "deny")])
@@ -496,6 +505,8 @@ class EqualityDepthTests(unittest.TestCase):
     def test_lists_compare_elementwise(self):
         self.assertTrue(matches_value([1, 2], [1, 2]))
         self.assertFalse(matches_value([1, 2], [1, 2, 3]))
+        # the rulebook operand longer than the action value must not match either
+        self.assertFalse(matches_value([1, 2, 3], [1, 2]))
         self.assertFalse(matches_value([1], [1.0]))
         self.assertTrue(matches_value([1, [2]], [1, [2]]))
         self.assertFalse(matches_value([1, [2]], [1, [2.0]]))
@@ -544,6 +555,17 @@ class OperandTypeTests(unittest.TestCase):
             {"tool": "x", "arguments": {"n": True}},
         )
 
+    def test_string_operators_reject_non_string_operands(self):
+        # glob/contains operands are not type-checked at load (unlike matches),
+        # so a bad operand must still fail loudly at match time
+        for operator in ("glob", "contains"):
+            with self.subTest(operator=operator), self.assertRaises(RulebookError) as ctx:
+                self.verdict_for(
+                    {"arguments": {"n": {operator: 7}}},
+                    {"tool": "x", "arguments": {"n": "value"}},
+                )
+            self.assertIn("requires string operands", str(ctx.exception))
+
 
 class ResolutionTests(unittest.TestCase):
     def test_nested_arguments_expand_to_dotted_paths(self):
@@ -561,12 +583,30 @@ class ResolutionTests(unittest.TestCase):
             with self.subTest(action=action), self.assertRaises(MissingPathError):
                 check(rbook, action)
 
+    def test_non_object_situation_mid_path_is_a_missing_path(self):
+        # {"situation.agent.name": …} against {"agent": "ci-bot"}: the walk
+        # hits a string and must error, not treat it as absent
+        rbook = book([rule("r", [{"situation.agent.name": "ops"}], "deny")])
+        with self.assertRaises(MissingPathError) as ctx:
+            check(rbook, {"tool": "x"}, {"agent": "ci-bot"})
+        self.assertIn("situation.agent.name", str(ctx.exception))
+        self.assertEqual(
+            check(rbook, {"tool": "x"}, {"agent": {"name": "ops"}})["verdict"], "deny"
+        )
+
     def test_unreachable_grammar_asserts(self):
         # defensive invariants: the predicate grammar is closed
         with self.assertRaises(AssertionError):
             _resolve("bogus", {}, {})
         with self.assertRaises(AssertionError):
             _satisfies(Predicate("tool", "bogus", 1), "x")
+
+    def test_situation_path_part_that_is_a_substring_of_a_string(self):
+        # "ci" is `in` "ci-bot"; a non-object node must still fail as a
+        # missing path rather than being indexed
+        rbook = book([rule("r", [{"situation.agent.ci": "bot"}], "deny")])
+        with self.assertRaises(MissingPathError):
+            check(rbook, {"tool": "x"}, {"agent": "ci-bot"})
 
     def test_strictest_consults_rulebooks_even_when_a_rule_already_denies(self):
         rbook = book([

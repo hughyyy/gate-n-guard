@@ -147,7 +147,9 @@ class RetryPolicyTests(unittest.TestCase):
         client = AdvisoryClient(config(openrouter_api_key=None))
         with self.assertRaises(InferenceError) as ctx:
             client.complete([{"role": "user", "content": "hi"}])
-        self.assertIn("OPENROUTER_API_KEY", str(ctx.exception))
+        # the client's own guard, not the transport constructor's ValueError
+        self.assertIn("OpenRouter model requested but OPENROUTER_API_KEY is not set",
+                      str(ctx.exception))
 
 
 class RoutingTests(unittest.TestCase):

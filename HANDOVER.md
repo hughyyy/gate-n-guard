@@ -25,7 +25,7 @@ weigh-n-decide, gate-n-guard).
 
 ## Current state (verified 2026-10-23)
 
-- **268 tests pass** (`.venv/bin/python -m unittest discover -s tests -q`,
+- **275 tests pass** (`.venv/bin/python -m unittest discover -s tests -q`,
   zero dev deps): matcher (both precedence modes, predicates, the full
   validation matrix, deep type-strict equality, operand-type errors,
   resolution, determinism), journal (append/filters/bounds/ordering, five
@@ -35,15 +35,30 @@ weigh-n-decide, gate-n-guard).
   fallback chain, routing, metadata, both transports), openrouter (request
   shape, headers, 399/400 boundary, malformed bodies, content parts), config
   (env parsing, invalid values, routing helpers), server (registration,
-  wiring, the advertised contract, end-to-end tool calls, `main()`).
+  wiring, the advertised contract, end-to-end tool calls, `main()`),
+  entry point (`python -m gate_n_guard` spawned as a real subprocess:
+  handshake, tools/list, one verdict, clean exit; and a keyless,
+  rulebook-less run that still starts and fails closed with `isError`).
 - **Coverage is measured, not claimed (2026-10-23)**: `tools/coverage.py`
-  (stdlib `sys.monitoring`, no dev deps) reports **740/740 function-body
-  lines, 100%**; `tools/mutation.py` seeds 24 plausible bugs (precedence
+  (stdlib `sys.monitoring`, no dev deps) reports **739/739 function-body
+  lines, 100%**; `tools/mutation.py` seeds **35** plausible bugs (precedence
   inversion, type-loose equality, filter bounds, retry-budget off-by-one,
-  dropped shape checks, unset `isError`, dropped `rules` param, …) and gets
-  **24/24 killed**. Two mutants survived the first run — the limit clamp and
-  the retry budget — and the two tests added for them are the reason those
-  numbers hold; keep that habit.
+  dropped shape checks, unset `isError`, dropped `rules` param, condition
+  inversions) and gets **35/35 killed**.
+  Two lessons worth keeping:
+  - The first round left two survivors (limit clamp, retry budget) and the
+    second left six; each survivor named a missing test, and each is now
+    covered. Treat a survivor as a bug report against the suite.
+  - Direction (branch) coverage is **not** gated on `sys.monitoring`: it
+    reports only one destination for some CPython jump layouts (reproduced on
+    a synthetic guard taken both ways), so it is printed as an advisory
+    decision-point count (223/223 executed) and condition directions are
+    proven by mutation instead. Three mutants are documented as equivalent
+    and excluded with reasons in `tools/mutation.py`.
+  - Two dead conditions found this way were removed rather than tested:
+    `_parse_fallbacks`'s `if p.strip()` (str.split already drops empties) and
+    `_evaluate_rule`'s `entry_matched and result` (the loop breaks first, so
+    the conjunction never short-circuits).
 - **Full live test campaign through the registered OMP server (~45 calls,
   2026-10-23)**: all four tools exercised. Highlights beyond the standing
   smoke: `strictest` mode deny-dominance and all-consulted trace; type-strict

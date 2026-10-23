@@ -59,6 +59,7 @@ tests/
   test_config.py     # env parsing, defaults, invalid values, routing helpers
   test_server.py     # registration, handler wiring, advertised contract,
                      #   end-to-end tool calls, isError
+  test_entrypoint.py # real `python -m gate_n_guard` subprocess over stdio
 tools/
   coverage.py        # line-coverage report (sys.monitoring, stdlib only)
   mutation.py        # mutation spot-check: seeded bugs must fail the suite
@@ -121,7 +122,7 @@ test claims otherwise.
 
 None for v1 scope: all seven design questions are resolved (Q7: static
 reasons) and every module — matcher, journal, loader, advise, engines,
-server, entry point — ships with tests (268). Live advisory calls with
+server, entry point — ships with tests (275). Live advisory calls with
 real keys ran through the registered OMP server (2026-10-23: interpret
 single/whole, apply model-mode, apply auto escalation, gap), and the
 without-keys error path was live-verified against a fresh keyless
@@ -132,16 +133,22 @@ quality/latency like look-n-see did before release.
 
 - `python -m compileall` / import smoke after changes.
 - `.venv/bin/python -m unittest discover -s tests -q` — the offline suite
-  (268 tests; no network, no keys, no journal required).
+  (275 tests; no network, no keys, no journal required).
 - `python tools/coverage.py` — line coverage over function bodies using
-  `sys.monitoring` (stdlib only). Current: **740/740 lines, 100%**. The
+  `sys.monitoring` (stdlib only). Current: **739/739 lines, 100%**. Decision
+  points are reported alongside as an advisory count (223/223 executed):
+  `sys.monitoring` does not report a destination for every CPython jump
+  layout, so direction coverage is proven by mutation instead.
   measurement deliberately excludes module-level statements (they run at
   import), class bodies, and signature/decorator lines, which never emit
   LINE events; everything a function actually does is counted.
-- `python tools/mutation.py` — mutation spot-check: 24 seeded bugs (precedence
+- `python tools/mutation.py` — mutation spot-check: 35 seeded bugs (precedence
   inversion, type-loose equality, filter bounds, retry budget off-by-one,
-  dropped shape checks, unset `isError`, dropped `rules` param, …) must each
-  fail the suite. Current: **24/24 killed, 0 survivors**. A survivor means a
+  dropped shape checks, unset `isError`, dropped `rules` param, condition
+  inversions in the guard clauses, …) must each fail the suite. Current:
+  **35/35 killed, 0 survivors**. Three further mutants are documented as
+  equivalent and deliberately absent (see the module docstring): no test can
+  observe them on this platform. A survivor means a
   behaviour nothing defends — add the test, not the mutant.
 - The advertised contract is asserted offline in
   `tests/test_server.py::AdvertisementTests` (instructions, `serverInfo`
@@ -150,6 +157,11 @@ quality/latency like look-n-see did before release.
 - End-to-end tool calls (record→audit, filters, check/advise with the env
   rulebook, `main()` stdio dispatch) run in
   `tests/test_server.py::ToolCallTests`.
+- The real entry point runs as a subprocess in
+  `tests/test_entrypoint.py` (`python -m gate_n_guard`): handshake,
+  `tools/list`, one gated verdict with a hash-checked `rulebook_ref`, an
+  `isError` result for a schema violation, and a clean exit — plus a
+  keyless, rulebook-less start that still registers and fails closed.
 - Live advisory calls are manual smoke (real MCP call through the harness),
   not part of the suite.
 
@@ -166,6 +178,16 @@ malformed line; loader source precedence and every failure mode; retry budget,
 backoff schedule, dedupe, and fallback chain composition; OpenRouter status
 boundary (399/400), malformed bodies, and content-part shapes; advise mode
 escalation and all four shape contracts; the MCP advertisement itself.
+
+Boundary choices that are easy to miss and are pinned by tests: the rulebook
+operand being *longer* than the action value (not only shorter) must not match;
+a `situation.<path>` segment that is a substring of a string fact must raise
+`MissingPathError` instead of indexing it; `glob`/`contains` operands are
+type-checked at match time (unlike `matches`, which fails at load); an
+extraction candidate with `{` and no `}` is rejected; `situation.` with no path
+is an unknown key, not a predicate on an empty path; a record whose `ts` lacks
+a timezone is skipped, not compared naively; `audit` caps instead of rejecting
+an oversized `limit`.
 
 ## Release plan
 

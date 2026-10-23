@@ -337,7 +337,9 @@ def _evaluate_rule(rule: Rule, action: dict, situation: dict) -> dict:
                 "value": predicate.value,
                 "result": bool(result),
             })
-            entry_matched = entry_matched and result
+            # entry_matched is still True here: a failed predicate breaks the
+            # loop above, so the conjunction's second arm is never short-circuited
+            entry_matched = result
         entry_outcomes.append({"matched": entry_matched, "predicates": predicate_outcomes})
         if entry_matched:
             # any-entry semantics: once an entry holds, the rule matches and

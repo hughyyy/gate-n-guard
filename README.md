@@ -13,15 +13,16 @@ collection: [look-n-see](../look-n-see) (vision/OCR), [scrape-n-search](../scrap
 > resolved (1–7; Q7: static reasons). The full surface ships: matcher (both
 > precedence modes), decision journal, rulebook loader with `rulebook_ref`,
 > advise with deterministic apply, and the stdio server registering `check` /
-> `record` / `audit` / `advise` — 268 offline tests, live stdio smoke passed,
+> `record` / `audit` / `advise` — 275 offline tests (unit, advertisement, end-to-end stdio), live stdio
+> smoke passed,
 > and a direct test campaign through the registered OMP server (~45 calls:
 > verdict matrix, precedence modes, journal round-trip and filters, advise
 > modes, error paths, determinism). The advertised contract (server
 > instructions, typed schemas, tool annotations, `isError` on failures) is
 > covered by tests too. Test depth is measured, not asserted:
 > `python tools/coverage.py` reports 100% of function-body lines and
-> `python tools/mutation.py` kills all 24 seeded bugs (precedence, type-strict
-> equality, filter bounds, retry budgets, error flags). See `BRIEF.md`
+> `python tools/mutation.py` kills all 35 seeded bugs (precedence, type-strict
+> equality, filter bounds, retry budgets, error flags, condition inversions). See `BRIEF.md`
 > (requirements) and `IMPLEMENTATION.md` (design, release plan).
 
 ## The idea

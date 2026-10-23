@@ -79,8 +79,7 @@ def _env_float(name: str, default: float) -> float:
 def _parse_fallbacks(raw: str | None) -> tuple[str, ...]:
     if raw is None:
         return DEFAULT_FALLBACKS
-    parts = [p.strip() for p in raw.replace(",", " ").split() if p.strip()]
-    return tuple(parts)
+    return tuple(raw.replace(",", " ").split())
 
 
 def load_config() -> Config:

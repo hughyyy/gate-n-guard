@@ -181,6 +181,13 @@ class ExtractionEdgeTests(unittest.TestCase):
                 _extract_json(text)
             self.assertIn("not a JSON object", str(ctx.exception))
 
+    def test_unbalanced_braces_are_rejected(self):
+        # a '{' with no later '}' cannot be sliced into JSON
+        for text in ('{"a": 1', 'prose {"a": 1', '```json\n{"a": 1\n```'):
+            with self.subTest(text=text), self.assertRaises(AdviseError):
+                _extract_json(text)
+
+
     def test_multiple_objects_are_not_merged_and_are_rejected(self):
         with self.assertRaises(AdviseError):
             _extract_json('{"a": 1} {"b": 2}')

@@ -23,6 +23,13 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Equivalent mutants are deliberately absent, because no test can observe them:
+#   * _extract_json's `or` → `and` brace test: both spellings reject every
+#     malformed candidate (a slice without "{" can never parse to an object);
+#   * fnmatchcase → fnmatch: `os.path.normcase` is identity on POSIX;
+#   * dropping the "Z" normalisation: fromisoformat accepts "Z" since 3.11
+#     (the branch still matters for the 3.10 floor in requires-python).
+#
 # (file, original snippet, mutated snippet, description)
 MUTANTS = [
     ("rules.py", '        if outcome["matched"]:', '        if not outcome["matched"]:',
@@ -84,6 +91,32 @@ MUTANTS = [
     ("server.py", "        return _wrap(handler.check, rules, action, situation)",
      "        return _wrap(handler.check, None, action, situation)",
      "explicit rules param is dropped"),
+    # --- condition-level mutants: both directions of a decision must be tested
+    ("advise.py", 'if payload.get("coverage") not in ("adequate", "partial", "none") or \\',
+     'if payload.get("coverage") not in ("adequate", "partial", "none", "full") or \\',
+     "gap coverage vocabulary widened"),
+    ("rules.py", "        return len(left) == len(right) and all(", "        return len(left) <= len(right) and all(",
+     "list equality ignores extra elements"),
+    ("rules.py", "        return left.keys() == right.keys() and all(", "        return all(",
+     "dict equality ignores the key set"),
+    ("rules.py", '        elif key.startswith("situation.") and len(key) > len("situation."):',
+     '        elif key.startswith("situation."):', "empty situation path becomes a predicate"),
+    ("rules.py", '            if not isinstance(node, dict) or part not in node:\n                raise MissingPathError(f"situation path missing: {path}")',
+     '            if part not in node:\n                raise MissingPathError(f"situation path missing: {path}")',
+     "non-object situation walk is unchecked"),
+    ("journal.py", '    if "id" not in record or "ts" not in record or "verdict" not in record:',
+     '    if "id" not in record or "ts" not in record:', "records without a verdict are accepted"),
+    ("client.py", "            if candidate in seen:\n                continue", "            if False:\n                continue",
+     "fallback chain stops deduping"),
+    ("client.py", "                if not self.config.openrouter_api_key:", "                if False:",
+     "missing OpenRouter key is not reported"),
+    ("config.py", '        if model_id.startswith(OPENROUTER_PREFIX):\n            return "openrouter"',
+     '        if model_id.startswith(OPENROUTER_PREFIX):\n            return "hf"',
+     "openrouter: prefix routes to hf"),
+    ("loader.py", "    result = dict(response)", "    result = response",
+     "attach_ref mutates its input"),
+    ("openrouter.py", "    if isinstance(content, list):", "    if False:",
+     "content parts are no longer unwrapped"),
 ]
 
 
