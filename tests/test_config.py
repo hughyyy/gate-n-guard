@@ -178,5 +178,28 @@ class LoadConfigTests(unittest.TestCase):
             self.assertEqual(load_config().fallbacks, ())
 
 
+
+class ConfigBoundsTests(unittest.TestCase):
+    def test_out_of_range_numbers_are_bounded(self):
+        env = {
+            "GATE_N_GUARD_MAX_TOKENS": "0",
+            "GATE_N_GUARD_TIMEOUT": "-5",
+            "GATE_N_GUARD_RETRIES": "-1",
+            "GATE_N_GUARD_RETRY_BACKOFF": "-2",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            cfg = load_config()
+        self.assertEqual(cfg.max_tokens, 1)
+        self.assertEqual(cfg.timeout, 60.0)
+        self.assertEqual(cfg.retries, 0)
+        self.assertEqual(cfg.retry_backoff, 0.0)
+
+    def test_helpers_apply_their_minimums(self):
+        with mock.patch.dict(
+            os.environ, {"X_INT": "-4", "X_FLOAT": "-1.5"}, clear=False
+        ):
+            self.assertEqual(_env_int("X_INT", 5, minimum=0), 0)
+            self.assertEqual(_env_float("X_FLOAT", 2.0, minimum=0.0), 0.0)
+
 if __name__ == "__main__":
     unittest.main()

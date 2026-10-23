@@ -347,5 +347,63 @@ class ToolCallTests(unittest.TestCase):
         factory.return_value.run.assert_called_once_with(transport="stdio")
 
 
+
+class EngineOverrideTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_explicit_auto_engine_keeps_the_configured_provider(self):
+        seen = {}
+
+        def factory(cfg):
+            seen["provider"] = cfg.provider
+            return DummyClient('{"meaning": "m", "permits": [], "requires": [], '
+                               '"forbids": [], "edge_cases": [], "confidence": 0.5}')
+
+        handler = GateHandler(make_config(self.dir.name), client_factory=factory)
+        handler.advise(RULES, question="interpret", rule_id="no-rm", engine="auto")
+        self.assertEqual(seen["provider"], "openrouter")
+
+    def test_explicit_engine_still_overrides_the_provider(self):
+        seen = {}
+
+        def factory(cfg):
+            seen["provider"] = cfg.provider
+            return DummyClient('{"meaning": "m", "permits": [], "requires": [], '
+                               '"forbids": [], "edge_cases": [], "confidence": 0.5}')
+
+        handler = GateHandler(make_config(self.dir.name), client_factory=factory)
+        handler.advise(RULES, question="interpret", rule_id="no-rm", engine="hf")
+        self.assertEqual(seen["provider"], "hf")
+
+
+class ToolMetadataTests(unittest.TestCase):
+    def setUp(self):
+        server = create_server()
+        self.tools = {
+            tool.name: tool for tool in asyncio.run(server.list_tools())
+        }
+
+    def test_every_tool_carries_titles_and_hints(self):
+        expected = {
+            "check": ("Gate an action", True, True, None, False),
+            "record": ("Record a decision", False, False, False, False),
+            "audit": ("Read the decision journal", True, True, None, False),
+            "advise": ("Ask about policy", False, False, False, True),
+        }
+        for name, (title, read_only, idempotent, destructive, open_world) in (
+            expected.items()
+        ):
+            with self.subTest(tool=name):
+                tool = self.tools[name]
+                self.assertEqual(tool.title, title)
+                self.assertIs(tool.annotations.read_only_hint, read_only)
+                self.assertIs(tool.annotations.idempotent_hint, idempotent)
+                self.assertIs(tool.annotations.destructive_hint, destructive)
+                self.assertIs(tool.annotations.open_world_hint, open_world)
+
 if __name__ == "__main__":
     unittest.main()

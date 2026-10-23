@@ -83,21 +83,29 @@ tools/
 | `HF_ENDPOINT` | — | dedicated HF inference endpoint (pins HF transport) |
 | `OPENROUTER_BASE_URL` / `OPENROUTER_SITE_URL` / `OPENROUTER_APP_NAME` | defaults | OpenRouter endpoint + optional referer/title headers |
 
-## Modules shipped (tested, 129 tests)
+## Modules shipped (tested, 328 tests)
 
-- **rules.py** — `load_rulebook` (validation), `check` envelope:
+- **rules.py** — `load_rulebook` (validation, unique ids, single-segment
+  argument names, non-empty nested argument objects, non-empty situation
+  path segments), `check` envelope:
   `{verdict, precedence, matched[], default_applied, trace}`; both
-  precedence modes; type-strict equality; predicate ops incl. `matches`
-  compiled at load; short-circuit semantics; `RulebookError` /
-  `MissingPathError`.
-- **journal.py** — `record_decision`, `read_journal` (newest-first,
-  filters, malformed-line skip-count), `JournalError`.
+  precedence modes and ties; type-strict equality and `in` membership;
+  predicate ops incl. `matches` compiled at load; short-circuit semantics;
+  `RulebookError` / `MissingPathError`.
+- **journal.py** — `record_decision` (serialize-before-write),
+  `read_journal` (newest-first, filters, malformed-line skip-count,
+  undecodable-byte tolerance), `JournalError` for bad paths and IO errors.
 - **loader.py** — `resolve_rulebook(rules, default_path)` → `(Rulebook,
-  ref {source, sha256})`; `attach_ref`.
-- **advise.py** — `advise(...)` orchestration; `_build_messages` prompts;
-  `_extract_json` (fence/prose tolerant); per-kind shape checks.
+  ref {source, sha256 over disk bytes})`; `attach_ref`; `~` expansion;
+  UTF-8 and empty-`file:` refs are source errors.
+- **advise.py** — `advise(...)` orchestration; action/situation validation
+  for apply/gap; `_build_messages` prompts (serialization-checked);
+  `_extract_json` (fence/prose tolerant); per-kind shape checks with key
+  whitelisting, nested-entry objects, and confidence bounds.
 - **openrouter.py / client.py / config.py** — look-n-see engine port,
-  chat-only (`AdvisoryClient`), `GATE_N_GUARD_*` env binding.
+  chat-only (`AdvisoryClient`), `GATE_N_GUARD_*` env binding with bounded
+  numerics; httpx transport errors retried; malformed provider bodies
+  rejected as declarative errors.
 
 ## Advertised contract (what a client sees before calling)
 
@@ -122,7 +130,7 @@ test claims otherwise.
 
 None for v1 scope: all seven design questions are resolved (Q7: static
 reasons) and every module — matcher, journal, loader, advise, engines,
-server, entry point — ships with tests (275). Live advisory calls with
+server, entry point — ships with tests (328). Live advisory calls with
 real keys ran through the registered OMP server (2026-10-23: interpret
 single/whole, apply model-mode, apply auto escalation, gap), and the
 without-keys error path was live-verified against a fresh keyless
@@ -133,23 +141,24 @@ quality/latency like look-n-see did before release.
 
 - `python -m compileall` / import smoke after changes.
 - `.venv/bin/python -m unittest discover -s tests -q` — the offline suite
-  (275 tests; no network, no keys, no journal required).
+  (328 tests; no network, no keys, no journal required).
 - `python tools/coverage.py` — line coverage over function bodies using
-  `sys.monitoring` (stdlib only). Current: **739/739 lines, 100%**. Decision
-  points are reported alongside as an advisory count (223/223 executed):
+  `sys.monitoring` (stdlib only). Current: **850/850 lines, 100%**. Decision
+  points are reported alongside as an advisory count (272/272 executed):
   `sys.monitoring` does not report a destination for every CPython jump
   layout, so direction coverage is proven by mutation instead.
   measurement deliberately excludes module-level statements (they run at
   import), class bodies, and signature/decorator lines, which never emit
   LINE events; everything a function actually does is counted.
-- `python tools/mutation.py` — mutation spot-check: 35 seeded bugs (precedence
-  inversion, type-loose equality, filter bounds, retry budget off-by-one,
-  dropped shape checks, unset `isError`, dropped `rules` param, condition
+- `python tools/mutation.py` — mutation spot-check: 52 seeded bugs (precedence
+  inversion, type-loose equality and `in` membership, grammar validation,
+  filter bounds, retry budget off-by-one, dropped shape checks, unset
+  `isError`, dropped `rules` param, encoding/IO failures, condition
   inversions in the guard clauses, …) must each fail the suite. Current:
-  **35/35 killed, 0 survivors**. Three further mutants are documented as
+  **52/52 killed, 0 survivors**. Further mutants are documented as
   equivalent and deliberately absent (see the module docstring): no test can
-  observe them on this platform. A survivor means a
-  behaviour nothing defends — add the test, not the mutant.
+  observe them on this platform. A survivor means a behaviour nothing
+  defends — add the test, not the mutant.
 - The advertised contract is asserted offline in
   `tests/test_server.py::AdvertisementTests` (instructions, `serverInfo`
   version, required/enum/bound schema fields, annotations, `isError` on
@@ -170,14 +179,20 @@ quality/latency like look-n-see did before release.
 Each test defends an observable contract: a verdict, a trace field, an error
 message, an ordering, a bound, a protocol field. Not tested: source text,
 incidental formatting, third-party internals. Edge-case inventory per module:
-both precedence modes and their tie behaviour; type-strict equality over
-scalars, lists, and dicts; every operator's operand-type errors; missing-path
-short-circuit order; rulebook validation for every field; journal filters at
-their inclusive/exclusive boundaries, limit bounds, and five kinds of
-malformed line; loader source precedence and every failure mode; retry budget,
-backoff schedule, dedupe, and fallback chain composition; OpenRouter status
-boundary (399/400), malformed bodies, and content-part shapes; advise mode
-escalation and all four shape contracts; the MCP advertisement itself.
+both precedence modes and their tie behaviour; type-strict equality and
+`in` membership over scalars, lists, and dicts; every operator's
+operand-type errors; missing-path short-circuit order; rulebook validation
+for every field plus duplicate ids, dotted/empty argument names, and empty
+nested `arguments`/`situation.` segments; journal filters at their
+inclusive/exclusive boundaries, limit bounds, malformed lines including
+undecodable bytes and BOMs, non-file/unreadable paths, non-serializable
+records, and equal-instant tie ordering; loader source precedence, CRLF
+byte hashing, `~` expansion, and every failure mode; retry budget, backoff
+schedule, real httpx transport exception classes, malformed HF/OpenRouter
+bodies, dedupe, and fallback chain composition; OpenRouter status boundary
+(399/400), malformed bodies, and content-part shapes; advise mode
+escalation, action/situation requirements, key whitelisting, nested shape
+contracts, and confidence bounds; the MCP advertisement and tool metadata.
 
 Boundary choices that are easy to miss and are pinned by tests: the rulebook
 operand being *longer* than the action value (not only shorter) must not match;

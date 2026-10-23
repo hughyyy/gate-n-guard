@@ -62,18 +62,20 @@ class Config:
         return model_id
 
 
-def _env_int(name: str, default: int) -> int:
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
     try:
-        return int(os.environ.get(name, str(default)))
+        value = int(os.environ.get(name, str(default)))
     except ValueError:
         return default
+    return max(value, minimum)
 
 
-def _env_float(name: str, default: float) -> float:
+def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
     try:
-        return float(os.environ.get(name, str(default)))
+        value = float(os.environ.get(name, str(default)))
     except ValueError:
         return default
+    return max(value, minimum)
 
 
 def _parse_fallbacks(raw: str | None) -> tuple[str, ...]:
@@ -86,13 +88,16 @@ def load_config() -> Config:
     engine = os.environ.get("GATE_N_GUARD_ENGINE", "openrouter").strip().lower()
     if engine not in {"auto", "hf", "openrouter"}:
         engine = "openrouter"
+    timeout = _env_float("GATE_N_GUARD_TIMEOUT", 60.0)
+    if timeout <= 0:
+        timeout = 60.0
     return Config(
         model=os.environ.get("GATE_N_GUARD_MODEL", DEFAULT_MODEL),
         endpoint=os.environ.get("HF_ENDPOINT") or None,
-        max_tokens=_env_int("GATE_N_GUARD_MAX_TOKENS", 2048),
-        timeout=_env_float("GATE_N_GUARD_TIMEOUT", 60.0),
-        retries=_env_int("GATE_N_GUARD_RETRIES", 3),
-        retry_backoff=_env_float("GATE_N_GUARD_RETRY_BACKOFF", 2.0),
+        max_tokens=_env_int("GATE_N_GUARD_MAX_TOKENS", 2048, minimum=1),
+        timeout=timeout,
+        retries=_env_int("GATE_N_GUARD_RETRIES", 3, minimum=0),
+        retry_backoff=_env_float("GATE_N_GUARD_RETRY_BACKOFF", 2.0, minimum=0.0),
         provider=engine,
         fallbacks=_parse_fallbacks(os.environ.get("GATE_N_GUARD_FALLBACKS")),
         openrouter_api_key=os.environ.get("OPENROUTER_API_KEY") or None,

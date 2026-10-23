@@ -45,6 +45,10 @@ def resolve_rulebook(
                 f"rules string must be a '{FILE_PREFIX}<path>' ref or inline JSON, "
                 f"got {rules[:60]!r}"
             )
+        if len(rules) == len(FILE_PREFIX):
+            raise RulebookSourceError(
+                f"'{FILE_PREFIX}' ref must include a non-empty path"
+            )
         return _load_file(rules[len(FILE_PREFIX):], source=rules)
     if rules is not None:
         raise RulebookSourceError(
@@ -67,13 +71,19 @@ def attach_ref(response: dict, ref: dict) -> dict:
 
 
 def _load_file(path: str, source: str) -> Tuple[Rulebook, dict]:
-    file = Path(path)
+    file = Path(path).expanduser()
     if not file.is_file():
         raise RulebookSourceError(f"rulebook file not found: {path}")
     try:
-        raw = file.read_text(encoding="utf-8")
+        raw_bytes = file.read_bytes()
     except OSError as exc:
         raise RulebookSourceError(f"rulebook file unreadable: {path}: {exc}") from exc
+    try:
+        raw = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RulebookSourceError(
+            f"rulebook file is not valid UTF-8: {path}: {exc}"
+        ) from exc
     try:
         data = json.loads(raw)
     except ValueError as exc:
@@ -84,12 +94,17 @@ def _load_file(path: str, source: str) -> Tuple[Rulebook, dict]:
         raise RulebookSourceError(f"rulebook file must contain a JSON object: {path}")
     return load_rulebook(data), {
         "source": source,
-        "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        "sha256": hashlib.sha256(raw_bytes).hexdigest(),
     }
 
 
 def _inline_ref(rules: dict) -> dict:
-    canonical = json.dumps(rules, sort_keys=True, ensure_ascii=False)
+    try:
+        canonical = json.dumps(rules, sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        raise RulebookSourceError(
+            f"inline rulebook is not JSON-serializable: {exc}"
+        ) from exc
     return {
         "source": "inline",
         "sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),

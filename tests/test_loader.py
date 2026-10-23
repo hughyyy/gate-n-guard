@@ -203,5 +203,59 @@ class AttachRefTests(unittest.TestCase):
         self.assertEqual(attached["rulebook_ref"]["source"], "new")
 
 
+
+class LoaderRobustnessTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "rules.json")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_invalid_utf8_file_is_a_source_error(self):
+        with open(self.path, "wb") as handle:
+            handle.write(b'{"default": "allow", "rules": []}\xff')
+        with self.assertRaises(RulebookSourceError) as ctx:
+            resolve_rulebook(f"file:{self.path}")
+        self.assertIn("not valid UTF-8", str(ctx.exception))
+        self.assertIn(self.path, str(ctx.exception))
+
+    def test_file_hash_covers_the_bytes_on_disk(self):
+        content = (
+            b'{\r\n  "default": "allow",\r\n'
+            b'  "rules": [{"id": "a", "when": [{"tool": "git"}], "verdict": "deny"}]\r\n}\r\n'
+        )
+        with open(self.path, "wb") as handle:
+            handle.write(content)
+        _, ref = resolve_rulebook(f"file:{self.path}")
+        self.assertEqual(ref["sha256"], hashlib.sha256(content).hexdigest())
+
+    def test_tilde_ref_expands_home(self):
+        previous = os.environ.get("HOME")
+        try:
+            with tempfile.TemporaryDirectory() as home:
+                os.environ["HOME"] = home
+                target = os.path.join(home, "rules.json")
+                with open(target, "w", encoding="utf-8") as handle:
+                    json.dump(RULES, handle)
+                rulebook, ref = resolve_rulebook("file:~/rules.json")
+                self.assertEqual(ref["source"], "file:~/rules.json")
+                self.assertEqual(rulebook.rules[0].id, "a")
+        finally:
+            if previous is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = previous
+
+    def test_empty_file_ref_is_rejected(self):
+        with self.assertRaises(RulebookSourceError) as ctx:
+            resolve_rulebook("file:")
+        self.assertIn("non-empty path", str(ctx.exception))
+
+    def test_inline_non_serializable_extra_is_a_source_error(self):
+        with self.assertRaises(RulebookSourceError) as ctx:
+            resolve_rulebook({**RULES, "extra": object()})
+        self.assertIn("JSON-serializable", str(ctx.exception))
+
 if __name__ == "__main__":
     unittest.main()

@@ -363,5 +363,139 @@ class MalformedLineTests(unittest.TestCase):
         self.assertEqual(sorted(first), ["a", "b"])
 
 
+
+class JournalRobustnessTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "decisions.jsonl")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def write_bytes(self, payload):
+        with open(self.path, "wb") as handle:
+            handle.write(payload)
+
+    def test_invalid_utf8_line_is_skipped_and_counted(self):
+        self.write_bytes(
+            b'{"id": "a", "ts": "2026-01-01T00:00:00+00:00", "verdict": "allow"}\n'
+            b'\xff\xfe not json\n'
+            b'{"id": "b", "ts": "2026-01-02T00:00:00+00:00", "verdict": "deny"}\n'
+        )
+        result = read_journal(self.path)
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual([r["id"] for r in result["records"]], ["b", "a"])
+
+    def test_directory_path_is_rejected_for_read_and_record(self):
+        with self.assertRaises(JournalError) as ctx:
+            read_journal(self.dir.name)
+        self.assertIn("not a file", str(ctx.exception))
+        with self.assertRaises(JournalError):
+            record_decision(self.dir.name, action={"tool": "x"}, verdict="allow")
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores file permissions")
+    def test_unreadable_journal_is_a_journal_error(self):
+        with open(self.path, "w", encoding="utf-8"):
+            pass
+        os.chmod(self.path, 0o000)
+        try:
+            with self.assertRaises(JournalError) as ctx:
+                read_journal(self.path)
+            self.assertIn("read failed", str(ctx.exception))
+        finally:
+            os.chmod(self.path, 0o600)
+
+    def test_non_serializable_fields_are_rejected_before_writing(self):
+        with self.assertRaises(JournalError) as ctx:
+            record_decision(
+                self.path,
+                action={"tool": "x", "arguments": {"payload": object()}},
+                verdict="allow",
+            )
+        self.assertIn("JSON-serializable", str(ctx.exception))
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_private_ts_field_round_trips(self):
+        self.write_bytes(
+            b'{"id": "a", "ts": "2026-01-01T00:00:00+00:00", '
+            b'"verdict": "allow", "__ts": "mine"}\n'
+        )
+        self.assertEqual(read_journal(self.path)["records"][0]["__ts"], "mine")
+
+    def test_extra_fields_pass_through(self):
+        row = {"id": "a", "ts": "2026-01-01T00:00:00+00:00",
+               "verdict": "allow", "custom": {"k": 1}}
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+        self.assertEqual(read_journal(self.path)["records"][0], row)
+
+    def test_bom_prefixed_line_is_skipped_not_fatal(self):
+        self.write_bytes(
+            b'\xef\xbb\xbf{"id": "a", "ts": "2026-01-01T00:00:00+00:00", "verdict": "allow"}\n'
+            b'{"id": "b", "ts": "2026-01-02T00:00:00+00:00", "verdict": "deny"}\n'
+        )
+        result = read_journal(self.path)
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(result["records"][0]["id"], "b")
+
+    def test_equal_instants_with_different_offsets_order_deterministically(self):
+        rows = [
+            {"id": "a", "ts": "2026-01-01T10:00:00Z", "verdict": "allow"},
+            {"id": "b", "ts": "2026-01-01T05:00:00-05:00", "verdict": "allow"},
+            {"id": "c", "ts": "2026-01-01T10:00:00+00:00", "verdict": "deny"},
+        ]
+        with open(self.path, "w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row) + "\n")
+        first = [r["id"] for r in read_journal(self.path)["records"]]
+        second = [r["id"] for r in read_journal(self.path)["records"]]
+        self.assertEqual(first, second)
+        self.assertEqual(first, ["a", "c", "b"])
+
+    def test_non_string_paths_are_journal_errors(self):
+        for path in (42, ["x"], {"path": "x"}):
+            with self.subTest(path=path):
+                with self.assertRaises(JournalError):
+                    read_journal(path)
+                with self.assertRaises(JournalError):
+                    record_decision(path, action={"tool": "x"}, verdict="allow")
+
+    def test_empty_matched_list_is_accepted(self):
+        stored = record_decision(
+            self.path, action={"tool": "x"}, verdict="deny", matched=[]
+        )
+        self.assertEqual(stored["matched"], [])
+
+    def test_non_string_verdict_in_the_file_is_returned_verbatim(self):
+        self.write_bytes(
+            b'{"id": "a", "ts": "2026-01-01T00:00:00+00:00", "verdict": 5}\n'
+        )
+        self.assertEqual(read_journal(self.path)["records"][0]["verdict"], 5)
+        self.assertEqual(read_journal(self.path, verdict="allow")["count"], 0)
+
+    def test_tilde_path_expands_home(self):
+        previous_home = os.environ.get("HOME")
+        previous_cwd = os.getcwd()
+        try:
+            with tempfile.TemporaryDirectory() as home:
+                os.environ["HOME"] = home
+                os.chdir(self.dir.name)
+                record_decision(
+                    "~/decisions.jsonl", action={"tool": "x"}, verdict="allow"
+                )
+                self.assertTrue(
+                    os.path.isfile(os.path.join(home, "decisions.jsonl"))
+                )
+                self.assertFalse(os.path.exists(os.path.join(self.dir.name, "~")))
+        finally:
+            os.chdir(previous_cwd)
+            if previous_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = previous_home
+
+
 if __name__ == "__main__":
     unittest.main()

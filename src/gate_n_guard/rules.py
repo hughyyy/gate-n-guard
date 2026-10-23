@@ -13,8 +13,8 @@ precedence mode (`first-match` or `strictest`). A rule matches when any of its
 Predicate operands: a bare value means equality (same JSON type); a
 single-key object selects an operator — `glob` (fnmatch over strings),
 `contains` (string substring), `matches` (regular-expression search, pattern
-compiled and syntax-checked at rulebook load), `in` (value in list), `eq`,
-and the numeric comparisons `lt`/`lte`/`gt`/`gte`.
+compiled and syntax-checked at rulebook load), `in` (same-type membership in
+a list), `eq`, and the numeric comparisons `lt`/`lte`/`gt`/`gte`.
 
 This predicate subset is the whole v1 grammar by design; aligning the matcher
 with weigh-n-decide's full condition grammar (boolean composition,
@@ -25,7 +25,9 @@ Missing paths are errors, never silent falses — but only when actually
 consulted: predicates inside a `when` entry and entries inside a rule are
 evaluated left to right with short-circuiting, so an action that already
 failed an earlier predicate is never tripped up by a later one. Malformed
-rulebooks raise `RulebookError` at load time.
+rulebooks raise `RulebookError` at load time, including duplicate rule ids,
+empty nested `arguments` objects, dotted/empty argument names, and empty
+`situation.` path segments.
 """
 
 from __future__ import annotations
@@ -98,6 +100,11 @@ def load_rulebook(data: dict) -> Rulebook:
     if not isinstance(raw_rules, list) or not raw_rules:
         raise RulebookError("rulebook must contain a non-empty rules list")
     rules = tuple(_load_rule(raw, index) for index, raw in enumerate(raw_rules))
+    seen_ids = set()
+    for rule in rules:
+        if rule.id in seen_ids:
+            raise RulebookError(f"duplicate rule id {rule.id!r}")
+        seen_ids.add(rule.id)
     return Rulebook(default=default, precedence=precedence, rules=rules)
 
 
@@ -140,6 +147,12 @@ def _entry_predicates(entry: Any, rule_id: str) -> list:
                 )
             predicates.extend(_arguments_predicates("arguments", operand, rule_id))
         elif key.startswith("situation.") and len(key) > len("situation."):
+            segments = key.split(".")[1:]
+            if any(not segment for segment in segments):
+                raise RulebookError(
+                    f"rule {rule_id!r}: situation path {key!r} must not contain "
+                    "empty segments"
+                )
             predicates.append(_operand_predicate(key, operand, rule_id))
         else:
             raise RulebookError(
@@ -160,6 +173,10 @@ def _arguments_predicates(path: str, operand: Any, rule_id: str) -> list:
     leaf position is a load error rather than a silent misinterpretation.
     """
     if isinstance(operand, dict):
+        if not operand:
+            raise RulebookError(
+                f"rule {rule_id!r}: {path}: arguments object must not be empty"
+            )
         operator_keys = [key for key in operand if key in _OPERATORS]
         if len(operator_keys) > 1:
             raise RulebookError(
@@ -175,6 +192,11 @@ def _arguments_predicates(path: str, operand: Any, rule_id: str) -> list:
             return [_make_predicate(path, operator, operand[operator], rule_id)]
         predicates = []
         for sub_key, sub_operand in operand.items():
+            if not isinstance(sub_key, str) or not sub_key or "." in sub_key:
+                raise RulebookError(
+                    f"rule {rule_id!r}: {path}: argument name {sub_key!r} must "
+                    "be a non-empty string without '.'"
+                )
             predicates.extend(
                 _arguments_predicates(f"{path}.{sub_key}", sub_operand, rule_id)
             )
@@ -390,7 +412,7 @@ def _satisfies(predicate: Predicate, value: Any) -> bool:
         _require_strings(predicate, value, want)
         return predicate.compiled.search(value) is not None
     if op == "in":
-        return value in want
+        return any(_same_type_eq(value, item) for item in want)
     if op in ("lt", "lte", "gt", "gte"):
         if not _is_number(value) or not _is_number(want):
             raise RulebookError(

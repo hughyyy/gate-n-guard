@@ -666,5 +666,83 @@ class DataclassShapeTests(unittest.TestCase):
             rbook.default = "deny"
 
 
+
+class StrictestTieTests(unittest.TestCase):
+    def test_every_tied_strictest_rule_is_a_winner(self):
+        rbook = book([
+            rule("d1", [{"tool": "x"}], "deny"),
+            rule("a", [{"tool": "x"}], "allow"),
+            rule("d2", [{"tool": "x"}], "deny"),
+        ], precedence="strictest")
+        result = check(rbook, {"tool": "x"})
+        self.assertEqual(result["verdict"], "deny")
+        self.assertEqual(
+            [match["id"] for match in result["matched"] if match["winner"]],
+            ["d1", "d2"],
+        )
+
+
+class GrammarEdgeCaseTests(unittest.TestCase):
+    def verdict_for(self, when, action, situation=None):
+        return check(book([rule("r", [when], "deny")]), action, situation)["verdict"]
+
+    def test_in_membership_uses_type_strict_equality(self):
+        numbers = {"situation.flag": {"in": [1]}}
+        self.assertEqual(self.verdict_for(numbers, {"tool": "x"}, {"flag": True}), "allow")
+        self.assertEqual(self.verdict_for(numbers, {"tool": "x"}, {"flag": 1}), "deny")
+        self.assertEqual(self.verdict_for(numbers, {"tool": "x"}, {"flag": 1.0}), "allow")
+        floats = {"situation.flag": {"in": [1.0]}}
+        self.assertEqual(self.verdict_for(floats, {"tool": "x"}, {"flag": 1}), "allow")
+        objects = {"situation.flag": {"in": [{"a": 1}]}}
+        self.assertEqual(
+            self.verdict_for(objects, {"tool": "x"}, {"flag": {"a": True}}), "allow"
+        )
+        self.assertEqual(
+            self.verdict_for(
+                {"situation.flag": {"in": [["a"]]}}, {"tool": "x"}, {"flag": ["a"]}
+            ),
+            "deny",
+        )
+
+    def test_in_empty_list_never_matches(self):
+        self.assertEqual(
+            self.verdict_for({"tool": {"in": []}}, {"tool": "bash"}), "allow"
+        )
+
+    def test_rule_ids_must_be_unique(self):
+        with self.assertRaises(RulebookError) as ctx:
+            book([
+                rule("dup", [{"tool": "a"}], "allow"),
+                rule("dup", [{"tool": "b"}], "deny"),
+            ])
+        self.assertIn("duplicate rule id", str(ctx.exception))
+
+    def test_empty_nested_arguments_object_is_a_load_error(self):
+        for arguments in ({"options": {}}, {"a": {"b": {}}}):
+            with self.subTest(arguments=arguments), self.assertRaises(
+                RulebookError
+            ) as ctx:
+                book([rule("r", [{"arguments": arguments}], "deny")])
+            self.assertIn("must not be empty", str(ctx.exception))
+
+    def test_argument_names_must_be_single_path_segments(self):
+        for name in ("a.b", "", "a..b"):
+            with self.subTest(name=name), self.assertRaises(RulebookError) as ctx:
+                book([rule("r", [{"arguments": {name: "v"}}], "deny")])
+            self.assertIn("argument name", str(ctx.exception))
+
+    def test_situation_paths_must_not_have_empty_segments(self):
+        for path in ("situation..agent", "situation.agent.", "situation.a..b"):
+            with self.subTest(path=path), self.assertRaises(RulebookError) as ctx:
+                book([rule("r", [{path: "x"}], "deny")])
+            self.assertIn("empty segments", str(ctx.exception))
+
+    def test_bare_situation_key_is_not_a_predicate(self):
+        with self.assertRaises(RulebookError):
+            book([rule("r", [{"situation": "x"}], "deny")])
+
+    def test_reason_defaults_to_empty_string(self):
+        self.assertEqual(book([rule("r", [{"tool": "x"}], "deny")]).rules[0].reason, "")
+
 if __name__ == "__main__":
     unittest.main()

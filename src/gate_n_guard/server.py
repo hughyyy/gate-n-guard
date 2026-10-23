@@ -135,7 +135,8 @@ class GateHandler:
         if engine is not None:
             if engine not in _ENGINES:
                 raise advise_mod.AdviseError(f"engine must be one of {_ENGINES!r}, got {engine!r}")
-            cfg = dataclasses.replace(self.config, provider=engine)
+            if engine != "auto":
+                cfg = dataclasses.replace(self.config, provider=engine)
         rulebook, ref = self._rulebook(rules)
         client = self._client_factory(cfg) if self._client_factory else AdvisoryClient(cfg)
         result = advise_mod.advise(

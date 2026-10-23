@@ -198,5 +198,31 @@ class RawResultTests(unittest.TestCase):
             result.extra = 1
 
 
+
+class MalformedBodyTests(unittest.TestCase):
+    def call(self, reply):
+        transport, _, _ = build(reply=reply)
+        return transport.chat_completion([], "m", 1)
+
+    def test_non_json_success_body_is_an_openrouter_error(self):
+        reply = httpx.Response(
+            200,
+            text="<html>",
+            request=httpx.Request("POST", "http://test/chat/completions"),
+        )
+        with self.assertRaises(OpenRouterError) as ctx:
+            self.call(reply)
+        self.assertIn("not JSON", str(ctx.exception))
+
+    def test_json_list_success_body_is_an_openrouter_error(self):
+        with self.assertRaises(OpenRouterError) as ctx:
+            self.call(response(payload=[1, 2]))
+        self.assertIn("not an object", str(ctx.exception))
+
+    def test_json_scalar_success_body_is_an_openrouter_error(self):
+        with self.assertRaises(OpenRouterError) as ctx:
+            self.call(response(payload="hi"))
+        self.assertIn("not an object", str(ctx.exception))
+
 if __name__ == "__main__":
     unittest.main()

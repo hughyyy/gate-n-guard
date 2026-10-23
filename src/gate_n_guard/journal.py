@@ -17,6 +17,7 @@ concurrent writers interleave whole lines, never partial ones.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,9 +47,11 @@ def record_decision(
 ) -> dict:
     """Append one decision record to the journal and return it.
 
-    Raises JournalError when the journal is unconfigured or a field is
-    malformed. Records carry only the fields the caller provided (plus id and
-    ts), so the JSONL schema is a convention, not a fixed shape.
+    Raises JournalError when the journal is unconfigured, a field is
+    malformed or not JSON-serializable, or the file cannot be written; no
+    partial line is written. Records carry only the fields the caller
+    provided (plus id and ts), so the JSONL schema is a convention, not a
+    fixed shape.
     """
     path = _require_path(journal_path, "record")
     if not isinstance(action, dict) or not isinstance(action.get("tool"), str) \
@@ -79,9 +82,16 @@ def record_decision(
         if value is not None:
             record[name] = value
 
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    try:
+        payload = json.dumps(record, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        raise JournalError(f"record: fields must be JSON-serializable: {exc}") from exc
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(payload + "\n")
+    except OSError as exc:
+        raise JournalError(f"record: journal write failed: {path}: {exc}") from exc
     return record
 
 
@@ -98,9 +108,10 @@ def read_journal(
     """Read the journal newest-first, applying filters.
 
     Returns {"count": N, "skipped": M, "records": [...]}. A line that is not
-    valid JSON, is not an object, or lacks a parseable `ts` is skipped and
-    counted in `skipped` — one bad line never fails an audit. A configured
-    but never-written file yields count 0, not an error.
+    valid JSON (including undecodable bytes), is not an object, or lacks a
+    parseable `ts` is skipped and counted in `skipped` — one bad line never
+    fails an audit. A missing file yields count 0; a configured path that is
+    not a regular file or cannot be read raises JournalError.
     """
     path = _require_path(journal_path, "audit")
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
@@ -113,20 +124,26 @@ def read_journal(
     tool = _require_filter_string("tool", tool)
     outcome_filter = _require_filter_string("outcome", outcome)
 
-    if not Path(path).is_file():
+    journal = Path(path)
+    if journal.exists() and not journal.is_file():
+        raise JournalError(f"audit: journal path is not a file: {path}")
+    if not journal.is_file():
         return {"count": 0, "skipped": 0, "records": []}
 
     parsed = []
     skipped = 0
-    with open(path, encoding="utf-8") as handle:
-        for line in handle:
-            record = _parse_line(line)
-            if record is None:
-                skipped += 1
-                continue
-            parsed.append(record)
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                record = _parse_line(line)
+                if record is None:
+                    skipped += 1
+                    continue
+                parsed.append(record)
+    except OSError as exc:
+        raise JournalError(f"audit: journal read failed: {path}: {exc}") from exc
 
-    matched_records = []
+    timed_records = []
     for record in parsed:
         ts = _parse_ts(record)
         if ts is None:
@@ -144,11 +161,10 @@ def read_journal(
             continue
         if tool is not None and record["action"].get("tool") != tool:
             continue
-        record["__ts"] = ts
-        matched_records.append(record)
+        timed_records.append((ts, record["ts"], record))
 
-    matched_records.sort(key=lambda r: (r["__ts"], r["ts"]), reverse=True)
-    records = [{k: v for k, v in r.items() if k != "__ts"} for r in matched_records[:limit]]
+    timed_records.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    records = [record for _, _, record in timed_records[:limit]]
     return {"count": len(records), "skipped": skipped, "records": records}
 
 
@@ -157,7 +173,9 @@ def _require_path(journal_path: Optional[str], tool: str) -> str:
         raise JournalError(
             f"{tool}: journal not configured — set GATE_N_GUARD_JOURNAL to enable"
         )
-    return journal_path
+    if not isinstance(journal_path, str):
+        raise JournalError(f"{tool}: journal path must be a string")
+    return os.path.expanduser(journal_path)
 
 
 def _require_filter_string(name: str, value: Optional[str]) -> Optional[str]:

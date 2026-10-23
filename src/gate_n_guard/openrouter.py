@@ -82,7 +82,17 @@ class OpenRouterTransport:
                 request=response.request,
                 response=response,
             )
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise OpenRouterError(
+                f"malformed OpenRouter response: body is not JSON ({exc})"
+            ) from exc
+        if not isinstance(data, dict):
+            raise OpenRouterError(
+                f"malformed OpenRouter response: body is not an object "
+                f"(body: {str(data)[:200]})"
+            )
         choices = data.get("choices")
         if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
             raise OpenRouterError(

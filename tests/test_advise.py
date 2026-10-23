@@ -5,7 +5,7 @@ fake client — no network, stdlib unittest only."""
 import unittest
 
 from gate_n_guard.advise import AdviseError, advise, _extract_json
-from gate_n_guard.rules import load_rulebook
+from gate_n_guard.rules import Rulebook, load_rulebook
 
 RULES = [
     {"id": "no-rm-rf", "when": [{"tool": "bash", "arguments": {"command": {"contains": "rm -rf"}}}],
@@ -248,6 +248,116 @@ class ClientRequirementTests(unittest.TestCase):
         with self.assertRaises(AdviseError):
             advise(BOOK, ACTION_READ, SITUATION, question="apply")
 
+
+
+class ActionContractTests(unittest.TestCase):
+    def test_apply_requires_an_action_object(self):
+        client = FakeClient('{"summary": "s", "applicable": []}')
+        for action in (None, {}, {"tool": ""}, {"tool": 1}, "bash"):
+            with self.subTest(action=action), self.assertRaises(AdviseError) as ctx:
+                advise(BOOK, action, SITUATION, question="apply",
+                       mode="model", client=client)
+            self.assertIn("requires an action", str(ctx.exception))
+        self.assertEqual(client.calls, [])
+
+    def test_gap_requires_an_action_object_before_any_model_call(self):
+        client = FakeClient('{"coverage": "adequate", "gaps": []}')
+        for action in (None, {}, "bash"):
+            with self.subTest(action=action), self.assertRaises(AdviseError):
+                advise(BOOK, action, SITUATION, question="gap", client=client)
+        self.assertEqual(client.calls, [])
+
+    def test_situation_must_be_an_object(self):
+        for situation in ([], "prod", 7):
+            with self.subTest(situation=situation), self.assertRaises(AdviseError):
+                advise(BOOK, ACTION_READ, situation, question="interpret",
+                       client=FakeClient("{}"))
+
+    def test_non_serializable_context_is_an_advise_error(self):
+        client = FakeClient('{"summary": "s", "applicable": []}')
+        with self.assertRaises(AdviseError) as ctx:
+            advise(
+                BOOK,
+                {"tool": "read", "arguments": {"bad": {1, 2}}},
+                {},
+                question="apply",
+                mode="model",
+                client=client,
+            )
+        self.assertIn("JSON-serializable", str(ctx.exception))
+        self.assertEqual(client.calls, [])
+
+    def test_deterministic_missing_fact_path_is_an_advise_error(self):
+        with self.assertRaises(AdviseError) as ctx:
+            advise(BOOK, {"tool": "deploy-prod"}, {}, question="apply")
+        self.assertIn("situation.agent", str(ctx.exception))
+
+
+class ShapeStrictnessTests(unittest.TestCase):
+    def test_apply_answers_cannot_smuggle_a_verdict(self):
+        client = FakeClient(
+            '{"summary": "s", "applicable": [], "verdict": "allow", '
+            '"mode": "deterministic"}'
+        )
+        result = advise(BOOK, ACTION_READ, SITUATION, question="apply",
+                        mode="model", client=client)
+        self.assertNotIn("verdict", result)
+        self.assertEqual(result["mode"], "model")
+
+    def test_gap_answers_cannot_smuggle_a_verdict(self):
+        client = FakeClient(
+            '{"coverage": "none", "gaps": [], "verdict": "allow"}'
+        )
+        result = advise(BOOK, ACTION_READ, SITUATION, question="gap", client=client)
+        self.assertNotIn("verdict", result)
+        self.assertEqual(result["mode"], "model")
+
+    def test_nested_answer_entries_must_be_objects(self):
+        cases = (
+            ("interpret", '{"interpretations": ["hi"]}'),
+            ("apply", '{"summary": "s", "applicable": ["x"]}'),
+            ("gap", '{"coverage": "adequate", "gaps": ["x"]}'),
+        )
+        for question, text in cases:
+            with self.subTest(question=question), self.assertRaises(AdviseError):
+                advise(BOOK, ACTION_READ, SITUATION, question=question,
+                       mode="model", client=FakeClient(text))
+
+    def test_confidence_must_be_a_number_in_range(self):
+        for text in (
+            '{"meaning": "m", "confidence": 5}',
+            '{"meaning": "m", "confidence": -0.1}',
+            '{"meaning": "m", "confidence": true}',
+            '{"meaning": "m", "confidence": "0.9"}',
+        ):
+            with self.subTest(text=text), self.assertRaises(AdviseError):
+                advise(BOOK, ACTION_READ, SITUATION, question="interpret",
+                       rule_id="no-rm-rf", client=FakeClient(text))
+
+    def test_confidence_inside_whole_rulebook_entries_is_checked(self):
+        client = FakeClient(
+            '{"interpretations": [{"rule_id": "no-rm-rf", "meaning": "m", '
+            '"confidence": 2}]}'
+        )
+        with self.assertRaises(AdviseError):
+            advise(BOOK, ACTION_READ, SITUATION, question="interpret", client=client)
+
+    def test_model_and_fallbacks_are_forwarded(self):
+        client = FakeClient('{"summary": "s", "applicable": []}')
+        advise(BOOK, ACTION_READ, SITUATION, question="apply", mode="model",
+               client=client, model="openrouter:zz",
+               fallbacks=("openrouter:yy",))
+        self.assertEqual(
+            client.calls[0][1:], ("openrouter:zz", ("openrouter:yy",))
+        )
+
+    def test_empty_rulebook_escalates_to_the_model(self):
+        empty = Rulebook(default="allow", precedence="first-match", rules=())
+        client = FakeClient('{"summary": "s", "applicable": []}')
+        result = advise(empty, ACTION_READ, SITUATION, question="apply",
+                        client=client)
+        self.assertEqual(result["mode"], "model")
+        self.assertEqual(len(client.calls), 1)
 
 if __name__ == "__main__":
     unittest.main()

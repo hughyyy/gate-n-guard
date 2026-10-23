@@ -391,5 +391,76 @@ class CompletionShapeTests(unittest.TestCase):
             completion.text = "other"
 
 
+
+class HttpxTransportRetryTests(unittest.TestCase):
+    def test_httpx_transport_errors_are_retryable(self):
+        cases = (
+            httpx.ConnectError("refused"),
+            httpx.ReadTimeout("slow"),
+            httpx.PoolTimeout("pool"),
+            httpx.WriteError("write"),
+            httpx.RemoteProtocolError("protocol"),
+        )
+        for exc in cases:
+            with self.subTest(exc=type(exc).__name__):
+                self.assertTrue(_is_retryable(exc))
+
+    def test_connect_error_is_retried_end_to_end(self):
+        client = AdvisoryClient(config(retries=2, retry_backoff=0.0))
+        transport = Recording(exc=httpx.ConnectError("refused"))
+        client._openrouter = transport
+        with self.assertRaises(InferenceError):
+            client.complete([{"role": "user", "content": "hi"}])
+        self.assertEqual(len(transport.calls), 3)
+
+    def test_negative_retry_budget_still_attempts_once(self):
+        client = AdvisoryClient(config(retries=-1, retry_backoff=0.0))
+        transport = Recording()
+        client._openrouter = transport
+        self.assertEqual(
+            client.complete([{"role": "user", "content": "hi"}]), "ok"
+        )
+        self.assertEqual(len(transport.calls), 1)
+
+
+class ErrorBodyShapeTests(unittest.TestCase):
+    def test_non_object_error_bodies_do_not_raise(self):
+        for payload in ([1, 2], "oops", {"error": {"code": 123}}):
+            with self.subTest(payload=payload):
+                self.assertIn("500", _describe_error(body_error(500, payload)))
+
+    def test_top_level_message_is_used(self):
+        self.assertEqual(
+            _describe_error(body_error(503, {"message": "down"})), "503: down"
+        )
+
+
+class MalformedHfPayloadTests(unittest.TestCase):
+    def transport_for(self, reply):
+        fake = mock.Mock()
+        fake.chat_completion.return_value = reply
+        return AdvisoryClient(
+            config(model="org/model", provider="hf", retries=0), fake
+        )
+
+    def test_missing_choices_is_a_clear_inference_error(self):
+        client = self.transport_for(SimpleNamespace(choices=[]))
+        with self.assertRaises(InferenceError) as ctx:
+            client.complete([{"role": "user", "content": "hi"}])
+        self.assertIn("malformed HuggingFace response", str(ctx.exception))
+
+    def test_dict_usage_is_normalized(self):
+        reply = SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(content="hi"), finish_reason="stop"
+            )],
+            usage={"total_tokens": 3},
+        )
+        completion = self.transport_for(reply).complete_with_meta(
+            [{"role": "user", "content": "hi"}]
+        )
+        self.assertEqual(completion.usage, {"total_tokens": 3})
+        self.assertEqual(completion.text, "hi")
+
 if __name__ == "__main__":
     unittest.main()

@@ -13,7 +13,7 @@ collection: [look-n-see](../look-n-see) (vision/OCR), [scrape-n-search](../scrap
 > resolved (1–7; Q7: static reasons). The full surface ships: matcher (both
 > precedence modes), decision journal, rulebook loader with `rulebook_ref`,
 > advise with deterministic apply, and the stdio server registering `check` /
-> `record` / `audit` / `advise` — 275 offline tests (unit, advertisement, end-to-end stdio), live stdio
+> `record` / `audit` / `advise` — 328 offline tests (unit, advertisement, end-to-end stdio), live stdio
 > smoke passed,
 > and a direct test campaign through the registered OMP server (~45 calls:
 > verdict matrix, precedence modes, journal round-trip and filters, advise
@@ -21,8 +21,9 @@ collection: [look-n-see](../look-n-see) (vision/OCR), [scrape-n-search](../scrap
 > instructions, typed schemas, tool annotations, `isError` on failures) is
 > covered by tests too. Test depth is measured, not asserted:
 > `python tools/coverage.py` reports 100% of function-body lines and
-> `python tools/mutation.py` kills all 35 seeded bugs (precedence, type-strict
-> equality, filter bounds, retry budgets, error flags, condition inversions). See `BRIEF.md`
+> `python tools/mutation.py` kills all 52 seeded bugs (precedence, type-strict
+> equality and `in` membership, grammar validation, filter bounds, retry
+> budgets, encoding/IO failures, error flags, condition inversions). See `BRIEF.md`
 > (requirements) and `IMPLEMENTATION.md` (design, release plan).
 
 ## The idea
@@ -138,6 +139,14 @@ Draft semantics:
   deliberate subset of weigh-n-decide's literal condition grammar, evaluated
   the same deterministic way (no `eval()`, missing fact path is an error, not
   a silent false).
+- **Type-strict values and a validated grammar.** Equality — and `in`
+  membership — compares JSON types exactly (`true` ≠ `1`, `1` ≠ `1.0`,
+  recursively inside lists and objects). Rule ids must be unique;
+  `arguments` names are single path segments (no `.`) and nested argument
+  objects must be non-empty; `situation.` paths may not contain empty
+  segments. Each malformed form is a load-time `RulebookError`, never a
+  silent reinterpretation. Rulebook and journal paths expand `~`, and a file
+  rulebook's `sha256` is over the bytes on disk (CRLF included).
 - **Grammar growth:** v1 stops at this predicate subset on purpose.
   Aligning the matcher with weigh-n-decide's full condition grammar (boolean
   composition — `not`/nested `and`/`or` — and arithmetic) is a possible later
@@ -199,8 +208,11 @@ that record, when configured:
   `outcome` is free-form, documented examples: `approved`, `denied`,
   `executed`, `aborted`, `escalated` — how the confirm resolved.
 - `audit` reads newest-first with filters (`verdict`, `outcome`, `tool`,
-  `since`/`before`, `limit`); a line that is not valid JSON or lacks a
-  parseable `ts` is skipped and counted in `skipped`, never fatal.
+  `since`/`before`, `limit`); a line that is not valid JSON — including
+  undecodable bytes — or lacks a parseable `ts` is skipped and counted in
+  `skipped`, never fatal. A path that exists but is not a regular file, or
+  cannot be read/written, is a `JournalError`; a missing file reads as an
+  empty journal.
 - Journaling is a caller choice: `record` is explicit, not an automatic
   side effect of `check` — the agent decides what deserves a trail.
 
@@ -239,6 +251,11 @@ judgment is genuinely needed. `mode: "model"` forces the model; `interpret`
 and `gap` always use the model. Every response names the mode that produced
 it.
 
+`apply` and `gap` require an action object with a non-empty string tool, and
+`situation` must be an object. Answers are key-whitelisted per question kind,
+so a model response can never add a verdict; `engine: auto` leaves the
+configured provider unchanged.
+
 ## Configuration (draft)
 
 | Variable | Default | Purpose |
@@ -250,6 +267,10 @@ it.
 | `GATE_N_GUARD_RULEBOOK` | — | optional default rulebook path, loaded once at startup when the `rules` param is omitted |
 | `GATE_N_GUARD_JOURNAL` | — | optional append-only decision journal (JSONL); unset → `record`/`audit` error clearly |
 | `OPENROUTER_API_KEY` / `HF_TOKEN` | — | secrets, env only (same as look-n-see) |
+
+Numeric env values are bounded: `GATE_N_GUARD_MAX_TOKENS` ≥ 1, `RETRIES` ≥
+0, `RETRY_BACKOFF` ≥ 0; a non-positive `TIMEOUT` falls back to `60`. Paths
+expand `~`.
 
 ## Install
 

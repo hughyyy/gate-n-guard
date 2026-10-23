@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 from huggingface_hub import InferenceClient
 
 from .config import Config
@@ -46,7 +47,9 @@ def _is_retryable(exc: Exception) -> bool:
         if code is not None:
             return code in RETRYABLE_STATUS
     # Connection/timeout errors from the underlying HTTP layer.
-    return isinstance(exc, (ConnectionError, TimeoutError)) or exc.__class__.__name__ in {
+    if isinstance(exc, (ConnectionError, TimeoutError, httpx.TransportError)):
+        return True
+    return exc.__class__.__name__ in {
         "ConnectionError",
         "Timeout",
         "ReadTimeout",
@@ -62,10 +65,14 @@ def _describe_error(exc: Exception) -> str:
             body = response.json()
         except Exception:
             body = {}
-        message = body.get("error")
-        if isinstance(message, dict):
-            message = message.get("message")
-        if message:
+        message = None
+        if isinstance(body, dict):
+            message = body.get("error")
+            if isinstance(message, dict):
+                message = message.get("message")
+            if not message:
+                message = body.get("message")
+        if isinstance(message, (str, int, float)) and message:
             return f"{response.status_code}: {message}"
         return str(exc)
     return str(exc)
@@ -91,10 +98,26 @@ class _HFTransport:
             model=call_model,
             max_tokens=max_tokens,
         )
+        choices = getattr(response, "choices", None)
+        if not isinstance(choices, list) or not choices:
+            raise InferenceError(
+                "malformed HuggingFace response: no choices "
+                f"(body: {str(response)[:200]})"
+            )
+        choice = choices[0]
+        message = getattr(choice, "message", None)
+        content = getattr(message, "content", None)
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            usage_dict = None
+        elif isinstance(usage, dict):
+            usage_dict = dict(usage)
+        else:
+            usage_dict = getattr(usage, "__dict__", None)
         return RawResult(
-            text=response.choices[0].message.content or "",
-            finish_reason=response.choices[0].finish_reason,
-            usage=response.usage.__dict__ if response.usage else None,
+            text=content or "",
+            finish_reason=getattr(choice, "finish_reason", None),
+            usage=usage_dict,
         )
 
 
@@ -165,7 +188,8 @@ class AdvisoryClient:
         bare_model = self.config.strip_prefix(model_id)
         last_error: Exception | None = None
         t0 = time.monotonic()
-        for attempt in range(self.config.retries + 1):
+        retries = max(0, self.config.retries)
+        for attempt in range(retries + 1):
             try:
                 result = transport.chat_completion(
                     messages, bare_model, max_tokens or self.config.max_tokens
@@ -182,7 +206,7 @@ class AdvisoryClient:
                 )
             except Exception as exc:  # noqa: BLE001 - retry policy decides
                 last_error = exc
-                if not _is_retryable(exc) or attempt >= self.config.retries:
+                if not _is_retryable(exc) or attempt >= retries:
                     break
                 time.sleep(self.config.retry_backoff * (2**attempt))
         # Bare detail: the chain wrapper builds the final message.

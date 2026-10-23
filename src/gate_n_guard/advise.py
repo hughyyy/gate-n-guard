@@ -21,7 +21,7 @@ import re
 from typing import Any, Optional
 
 from .client import AdvisoryClient
-from .rules import Rulebook, check
+from .rules import MissingPathError, Rulebook, RulebookError, check
 
 QUESTION_KINDS = ("interpret", "apply", "gap")
 MODES = ("auto", "model")
@@ -63,6 +63,17 @@ def advise(
         raise AdviseError(f"question must be one of {QUESTION_KINDS!r}, got {question!r}")
     if mode not in MODES:
         raise AdviseError(f"mode must be one of {MODES!r}, got {mode!r}")
+    if situation is not None and not isinstance(situation, dict):
+        raise AdviseError("advise: situation must be an object")
+    if question in ("apply", "gap") and (
+        not isinstance(action, dict)
+        or not isinstance(action.get("tool"), str)
+        or not action["tool"]
+    ):
+        raise AdviseError(
+            f"advise: question={question!r} requires an action object with a "
+            "non-empty string tool"
+        )
     if rule_id is not None:
         if question != "interpret":
             raise AdviseError("rule_id is only valid for question=interpret")
@@ -70,7 +81,10 @@ def advise(
             raise AdviseError(f"rule_id {rule_id!r} is not in this rulebook")
 
     if question == "apply" and mode == "auto":
-        deterministic = _apply_deterministic(rulebook, action, situation)
+        try:
+            deterministic = _apply_deterministic(rulebook, action, situation)
+        except (RulebookError, MissingPathError) as exc:
+            raise AdviseError(f"advise: {exc}") from exc
         if deterministic["applicable"]:
             return deterministic
 
@@ -109,22 +123,24 @@ def _build_messages(
     situation: dict,
     rule_id: Optional[str],
 ) -> list[dict[str, Any]]:
-    rulebook_json = json.dumps({
-        "default": rulebook.default,
-        "precedence": rulebook.precedence,
-        "rules": [
-            {"id": rule.id,
-             "when": [[{"path": p.path, "operator": p.operator, "value": p.value}
-                       for p in entry] for entry in rule.entries],
-             "verdict": rule.verdict,
-             "reason": rule.reason}
-            for rule in rulebook.rules
-        ],
-    }, ensure_ascii=False)
-    context = {
-        "action": action,
-        "situation": situation or {},
-    }
+    try:
+        rulebook_json = json.dumps({
+            "default": rulebook.default,
+            "precedence": rulebook.precedence,
+            "rules": [
+                {"id": rule.id,
+                 "when": [[{"path": p.path, "operator": p.operator, "value": p.value}
+                           for p in entry] for entry in rule.entries],
+                 "verdict": rule.verdict,
+                 "reason": rule.reason}
+                for rule in rulebook.rules
+            ],
+        }, ensure_ascii=False)
+        context_json = json.dumps(
+            {"action": action, "situation": situation or {}}, ensure_ascii=False
+        )
+    except (TypeError, ValueError) as exc:
+        raise AdviseError(f"advise: context is not JSON-serializable: {exc}") from exc
     instructions = {
         "interpret": (
             "Question: interpret "
@@ -156,7 +172,7 @@ def _build_messages(
         ),
     }[question]
     user_prompt = (
-        f"RULEBOOK:\n{rulebook_json}\n\nCONTEXT: {json.dumps(context, ensure_ascii=False)}\n\n"
+        f"RULEBOOK:\n{rulebook_json}\n\nCONTEXT: {context_json}\n\n"
         + instructions
         + "\n\nRespond with the JSON object only; no prose outside it."
     )
@@ -193,31 +209,70 @@ def _extract_json(text: str) -> dict:
 
 
 def _shape(question: str, payload: dict, rule_id: Optional[str]) -> dict:
-    """Validate the shape contract per question kind and echo the mode."""
+    """Validate the shape contract per question kind and echo the mode.
+
+    Only the keys named by the prompt survive: a model answer can never
+    smuggle in a verdict or a mode of its own.
+    """
     if question == "interpret":
         if rule_id is not None:
             if not isinstance(payload.get("meaning"), str):
                 raise AdviseError("interpret: model output lacks a string 'meaning'")
-            payload["rule_id"] = rule_id
+            _check_confidence(payload)
+            allowed = (
+                "meaning",
+                "permits",
+                "requires",
+                "forbids",
+                "edge_cases",
+                "confidence",
+            )
+            result = {key: payload[key] for key in allowed if key in payload}
+            result["rule_id"] = rule_id
         else:
-            if not isinstance(payload.get("interpretations"), list):
+            entries = payload.get("interpretations")
+            if not isinstance(entries, list) or not all(
+                isinstance(entry, dict) for entry in entries
+            ):
                 raise AdviseError(
-                    "interpret: model output lacks an 'interpretations' list"
+                    "interpret: model output lacks an 'interpretations' list "
+                    "of objects"
                 )
-    if question == "apply":
-        if not isinstance(payload.get("applicable"), list) or \
-                not isinstance(payload.get("summary"), str):
+            for entry in entries:
+                _check_confidence(entry)
+            result = {"interpretations": entries}
+    elif question == "apply":
+        applicable = payload.get("applicable")
+        if not isinstance(payload.get("summary"), str) or not isinstance(
+            applicable, list
+        ) or not all(isinstance(entry, dict) for entry in applicable):
             raise AdviseError(
                 "apply: model output must be an object with 'summary' (str) "
-                "and 'applicable' (list)"
+                "and 'applicable' (list of objects)"
             )
-    if question == "gap":
-        if payload.get("coverage") not in ("adequate", "partial", "none") or \
-                not isinstance(payload.get("gaps"), list):
+        allowed = ("summary", "applicable", "notable_missing")
+        result = {key: payload[key] for key in allowed if key in payload}
+    else:
+        gaps = payload.get("gaps")
+        if payload.get("coverage") not in ("adequate", "partial", "none") or not (
+            isinstance(gaps, list) and all(isinstance(entry, dict) for entry in gaps)
+        ):
             raise AdviseError(
-                "gap: model output must have 'coverage' (adequate|partial|none) "
-                "and 'gaps' (list)"
+                "gap: model output must have 'coverage' "
+                "(adequate|partial|none) and 'gaps' (list of objects)"
             )
-    result = dict(payload)
+        result = {"coverage": payload["coverage"], "gaps": gaps}
     result["mode"] = "model"
     return result
+
+
+def _check_confidence(payload: dict) -> None:
+    if "confidence" not in payload:
+        return
+    value = payload["confidence"]
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not 0 <= value <= 1
+    ):
+        raise AdviseError("interpret: 'confidence' must be a number in 0..1")
