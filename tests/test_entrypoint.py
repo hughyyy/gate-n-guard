@@ -134,5 +134,52 @@ class EntryPointTests(unittest.TestCase):
         self.assertIn("GATE_N_GUARD_RULEBOOK", replies[2]["result"]["content"][0]["text"])
 
 
+
+    def test_deterministic_advise_and_journal_errors_need_no_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            replies = self.run_session([
+                INITIALIZE,
+                INITIALIZED,
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                    "name": "advise",
+                    "arguments": {
+                        "rules": RULEBOOK,
+                        "question": "apply",
+                        "action": {"tool": "bash",
+                                   "arguments": {"command": "rm -rf /"}},
+                    },
+                }},
+                {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+                    "name": "audit", "arguments": {},
+                }},
+                {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {
+                    "name": "record",
+                    "arguments": {"action": {"tool": "read"}, "verdict": "allow"},
+                }},
+            ], env=clean_env(), cwd=tmp)
+
+        advice = json.loads(replies[2]["result"]["content"][0]["text"])
+        self.assertEqual(advice["mode"], "deterministic")
+        self.assertEqual(advice["verdict"], "deny")
+        for request_id in (3, 4):
+            self.assertTrue(replies[request_id]["result"]["isError"])
+            self.assertIn(
+                "GATE_N_GUARD_JOURNAL",
+                replies[request_id]["result"]["content"][0]["text"],
+            )
+
+    def test_unknown_tool_is_a_structured_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            replies = self.run_session([
+                INITIALIZE,
+                INITIALIZED,
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                    "name": "bogus", "arguments": {},
+                }},
+            ], env=clean_env(), cwd=tmp)
+
+        self.assertTrue(replies[2]["result"]["isError"])
+        self.assertIn("Unknown tool", replies[2]["result"]["content"][0]["text"])
+
 if __name__ == "__main__":
     unittest.main()

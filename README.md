@@ -13,7 +13,7 @@ collection: [look-n-see](../look-n-see) (vision/OCR), [scrape-n-search](../scrap
 > resolved (1–7; Q7: static reasons). The full surface ships: matcher (both
 > precedence modes), decision journal, rulebook loader with `rulebook_ref`,
 > advise with deterministic apply, and the stdio server registering `check` /
-> `record` / `audit` / `advise` — 328 offline tests (unit, advertisement, end-to-end stdio), live stdio
+> `record` / `audit` / `advise` — 373 offline tests (unit, advertisement, end-to-end stdio), live stdio
 > smoke passed,
 > and a direct test campaign through the registered OMP server (~45 calls:
 > verdict matrix, precedence modes, journal round-trip and filters, advise
@@ -21,9 +21,10 @@ collection: [look-n-see](../look-n-see) (vision/OCR), [scrape-n-search](../scrap
 > instructions, typed schemas, tool annotations, `isError` on failures) is
 > covered by tests too. Test depth is measured, not asserted:
 > `python tools/coverage.py` reports 100% of function-body lines and
-> `python tools/mutation.py` kills all 52 seeded bugs (precedence, type-strict
-> equality and `in` membership, grammar validation, filter bounds, retry
-> budgets, encoding/IO failures, error flags, condition inversions). See `BRIEF.md`
+> `python tools/mutation.py` kills all 65 seeded bugs (precedence, type-strict
+> equality and `in` membership, grammar and operand validation, filter
+> bounds, retry budgets, encoding/IO failures, shape checks, error flags,
+> condition inversions). See `BRIEF.md`
 > (requirements) and `IMPLEMENTATION.md` (design, release plan).
 
 ## The idea
@@ -144,8 +145,12 @@ Draft semantics:
   recursively inside lists and objects). Rule ids must be unique;
   `arguments` names are single path segments (no `.`) and nested argument
   objects must be non-empty; `situation.` paths may not contain empty
-  segments. Each malformed form is a load-time `RulebookError`, never a
-  silent reinterpretation. Rulebook and journal paths expand `~`, and a file
+  segments. Operand shapes are validated at load too: `glob`/`contains`/
+  `matches` take strings, numeric comparisons take numbers, `in` takes a
+  non-empty list, and `tool` predicates are string-compatible (`in` lists
+  contain only strings) so a rule can never be dead on arrival. Each
+  malformed form is a load-time `RulebookError`, never a silent
+  reinterpretation. Rulebook and journal paths expand `~`, and a file
   rulebook's `sha256` is over the bytes on disk (CRLF included).
 - **Grammar growth:** v1 stops at this predicate subset on purpose.
   Aligning the matcher with weigh-n-decide's full condition grammar (boolean
@@ -252,9 +257,11 @@ and `gap` always use the model. Every response names the mode that produced
 it.
 
 `apply` and `gap` require an action object with a non-empty string tool, and
-`situation` must be an object. Answers are key-whitelisted per question kind,
-so a model response can never add a verdict; `engine: auto` leaves the
-configured provider unchanged.
+`situation` must be an object. Answers are key-whitelisted per question kind
+and their nested entries are shape-checked (required strings, string lists,
+confidence in 0..1), so a model response can never add a verdict or an
+ambiguous result shape; prose around the JSON answer may contain braces.
+`engine: auto` leaves the configured provider unchanged.
 
 ## Configuration (draft)
 
@@ -269,8 +276,9 @@ configured provider unchanged.
 | `OPENROUTER_API_KEY` / `HF_TOKEN` | — | secrets, env only (same as look-n-see) |
 
 Numeric env values are bounded: `GATE_N_GUARD_MAX_TOKENS` ≥ 1, `RETRIES` ≥
-0, `RETRY_BACKOFF` ≥ 0; a non-positive `TIMEOUT` falls back to `60`. Paths
-expand `~`.
+0, `RETRY_BACKOFF` ≥ 0; a non-positive `TIMEOUT` falls back to `60`. Blank
+or whitespace-only values are treated as unset, string values are trimmed,
+and paths expand `~`.
 
 ## Install
 

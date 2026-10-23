@@ -359,5 +359,117 @@ class ShapeStrictnessTests(unittest.TestCase):
         self.assertEqual(result["mode"], "model")
         self.assertEqual(len(client.calls), 1)
 
+
+class ExtractionBraceTests(unittest.TestCase):
+    def test_prose_braces_before_the_answer_are_tolerated(self):
+        self.assertEqual(
+            _extract_json('Setting {foo} to bar. The answer is {"a": 1}'),
+            {"a": 1},
+        )
+
+    def test_trailing_brace_after_the_answer_is_tolerated(self):
+        self.assertEqual(_extract_json('{"a": 1} trailing }'), {"a": 1})
+
+    def test_brace_inside_a_json_string_is_not_a_boundary(self):
+        self.assertEqual(_extract_json('{"a": "}"} then }'), {"a": "}"})
+
+    def test_brace_in_prose_after_a_fenced_answer_is_tolerated(self):
+        self.assertEqual(
+            _extract_json('```json\n{"a": 2}\n```\nuse {this} later'), {"a": 2}
+        )
+
+    def test_two_parseable_objects_are_still_rejected(self):
+        with self.assertRaises(AdviseError) as ctx:
+            _extract_json('{"a": 1} and {"b": 2}')
+        self.assertIn("multiple JSON objects", str(ctx.exception))
+
+
+class NestedShapeTests(unittest.TestCase):
+    def test_interpret_list_fields_must_be_string_lists(self):
+        for key in ("permits", "requires", "forbids", "edge_cases"):
+            with self.subTest(key=key), self.assertRaises(AdviseError):
+                advise(
+                    BOOK, ACTION_READ, SITUATION, question="interpret",
+                    rule_id="no-rm-rf",
+                    client=FakeClient('{"meaning": "m", "%s": [1]}' % key),
+                )
+
+    def test_whole_rulebook_entries_need_rule_id_and_meaning(self):
+        for entry in ('{"meaning": "m"}', '{"rule_id": "no-rm-rf"}',
+                      '{"rule_id": "", "meaning": "m"}'):
+            with self.subTest(entry=entry), self.assertRaises(AdviseError):
+                advise(
+                    BOOK, ACTION_READ, SITUATION, question="interpret",
+                    client=FakeClient('{"interpretations": [%s]}' % entry),
+                )
+
+    def test_whole_rulebook_entries_are_key_whitelisted(self):
+        client = FakeClient(
+            '{"interpretations": [{"rule_id": "no-rm-rf", "meaning": "m", '
+            '"permits": ["safe"], "verdict": "allow", "mode": "deterministic"}]}'
+        )
+        result = advise(BOOK, ACTION_READ, SITUATION, question="interpret",
+                        client=client)
+        entry = result["interpretations"][0]
+        self.assertEqual(entry["permits"], ["safe"])
+        self.assertNotIn("verdict", entry)
+        self.assertNotIn("mode", entry)
+
+    def test_apply_entries_need_rule_id_relevance_and_reading(self):
+        for entry in ('{}', '{"rule_id": "no-rm-rf"}',
+                      '{"rule_id": "no-rm-rf", "reading": "x"}',
+                      '{"rule_id": "no-rm-rf", "relevance": "r"}',
+                      '{"rule_id": 5, "relevance": "r", "reading": "x"}'):
+            with self.subTest(entry=entry), self.assertRaises(AdviseError):
+                advise(
+                    BOOK, ACTION_READ, SITUATION, question="apply", mode="model",
+                    client=FakeClient('{"summary": "s", "applicable": [%s]}' % entry),
+                )
+
+    def test_apply_entry_caveats_must_be_strings(self):
+        with self.assertRaises(AdviseError):
+            advise(
+                BOOK, ACTION_READ, SITUATION, question="apply", mode="model",
+                client=FakeClient(
+                    '{"summary": "s", "applicable": [{"rule_id": "a", '
+                    '"relevance": "r", "reading": "x", "caveats": [1]}]}'
+                ),
+            )
+
+    def test_notable_missing_must_be_a_string_list(self):
+        with self.assertRaises(AdviseError):
+            advise(
+                BOOK, ACTION_READ, SITUATION, question="apply", mode="model",
+                client=FakeClient(
+                    '{"summary": "s", "applicable": [], "notable_missing": "x"}'
+                ),
+            )
+
+    def test_gap_entries_need_all_three_string_fields(self):
+        for entry in ('{}', '{"concern": "c"}',
+                      '{"concern": "c", "suggested_rule": 5, "rationale": "r"}'):
+            with self.subTest(entry=entry), self.assertRaises(AdviseError):
+                advise(
+                    BOOK, ACTION_READ, SITUATION, question="gap",
+                    client=FakeClient(
+                        '{"coverage": "partial", "gaps": [%s]}' % entry
+                    ),
+                )
+
+    def test_valid_nested_entries_are_echoed_and_sanitized(self):
+        result = advise(
+            BOOK, ACTION_READ, SITUATION, question="apply", mode="model",
+            client=FakeClient(
+                '{"summary": "s", "applicable": [{"rule_id": "no-rm-rf", '
+                '"relevance": "high", "reading": "blocks rm", "caveats": ["c"], '
+                '"verdict": "allow"}], "notable_missing": ["gap"]}'
+            ),
+        )
+        self.assertEqual(result["applicable"], [{
+            "rule_id": "no-rm-rf", "relevance": "high",
+            "reading": "blocks rm", "caveats": ["c"],
+        }])
+        self.assertEqual(result["notable_missing"], ["gap"])
+
 if __name__ == "__main__":
     unittest.main()

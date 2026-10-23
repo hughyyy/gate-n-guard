@@ -15,7 +15,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from gate_n_guard import __version__
 from gate_n_guard import config as config_mod
 from gate_n_guard import journal as journal_mod
-from gate_n_guard.server import GateHandler, _Verdict, create_server, main
+from gate_n_guard.server import GateHandler, _Verdict, _wrap, create_server, main
 
 RULES = {"default": "allow", "rules": [
     {"id": "no-rm", "when": [{"tool": "bash", "arguments": {"command": {"contains": "rm -rf"}}}],
@@ -404,6 +404,93 @@ class ToolMetadataTests(unittest.TestCase):
                 self.assertIs(tool.annotations.idempotent_hint, idempotent)
                 self.assertIs(tool.annotations.destructive_hint, destructive)
                 self.assertIs(tool.annotations.open_world_hint, open_world)
+
+
+class HandlerCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "rules.json")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def write(self, rules):
+        with open(self.path, "w", encoding="utf-8") as handle:
+            json.dump(rules, handle)
+
+    def test_default_rulebook_is_cached_after_the_first_read(self):
+        self.write(RULES)
+        handler = GateHandler(make_config(self.dir.name, rulebook=self.path))
+        action = {"tool": "bash", "arguments": {"command": "rm -rf /"}}
+        first = handler.check(None, action, {})
+        self.assertEqual(first["verdict"], "deny")
+        self.write({
+            "default": "allow",
+            "rules": [{"id": "never", "when": [{"tool": "never"}], "verdict": "deny"}],
+        })
+        second = handler.check(None, action, {})
+        self.assertEqual(second["verdict"], "deny")
+        self.assertEqual(
+            second["rulebook_ref"]["sha256"], first["rulebook_ref"]["sha256"]
+        )
+
+    def test_failed_default_load_is_retried(self):
+        from gate_n_guard.loader import RulebookSourceError
+
+        handler = GateHandler(make_config(self.dir.name, rulebook=self.path))
+        action = {"tool": "bash", "arguments": {"command": "rm -rf /"}}
+        with self.assertRaises(RulebookSourceError):
+            handler.check(None, action, {})
+        self.write(RULES)
+        self.assertEqual(handler.check(None, action, {})["verdict"], "deny")
+
+
+class WrapTests(unittest.TestCase):
+    def test_unexpected_exception_becomes_a_structured_error(self):
+        def boom():
+            raise RuntimeError("boom")
+
+        result = _wrap(boom)
+        self.assertTrue(result.is_error)
+        self.assertEqual(
+            json.loads(result.content[0].text), {"error": "boom"}
+        )
+
+    def test_unicode_error_payload_is_preserved(self):
+        def boom():
+            raise ValueError("批准失败")
+
+        result = _wrap(boom)
+        self.assertEqual(
+            json.loads(result.content[0].text), {"error": "批准失败"}
+        )
+
+
+class CreateServerConfigTests(unittest.TestCase):
+    def test_config_supplies_the_default_rulebook(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "rules.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(RULES, handle)
+            server = create_server(cfg=make_config(tmp, rulebook=path))
+            result = asyncio.run(server.call_tool("check", {
+                "action": {"tool": "bash", "arguments": {"command": "rm -rf /"}},
+            }))
+        payload = json.loads(result.content[0].text)
+        self.assertEqual(payload["verdict"], "deny")
+        self.assertEqual(payload["rulebook_ref"]["source"], f"file:{path}")
+
+    def test_explicit_rules_override_the_configured_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_config(tmp, rulebook=os.path.join(tmp, "missing.json"))
+            server = create_server(cfg=cfg)
+            result = asyncio.run(server.call_tool("check", {
+                "action": {"tool": "git"},
+                "rules": {"default": "confirm", "rules": [
+                    {"id": "git", "when": [{"tool": "git"}], "verdict": "deny"},
+                ]},
+            }))
+        self.assertEqual(json.loads(result.content[0].text)["verdict"], "deny")
 
 if __name__ == "__main__":
     unittest.main()

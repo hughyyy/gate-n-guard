@@ -107,6 +107,11 @@ class _HFTransport:
         choice = choices[0]
         message = getattr(choice, "message", None)
         content = getattr(message, "content", None)
+        if content is not None and not isinstance(content, str):
+            raise InferenceError(
+                "malformed HuggingFace response: content is not a string "
+                f"(body: {str(response)[:200]})"
+            )
         usage = getattr(response, "usage", None)
         if usage is None:
             usage_dict = None

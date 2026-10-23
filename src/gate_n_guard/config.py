@@ -78,6 +78,14 @@ def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
     return max(value, minimum)
 
 
+def _env_text(name: str, default: str = "") -> str:
+    return os.environ.get(name, default).strip()
+
+
+def _env_optional(name: str) -> str | None:
+    return _env_text(name) or None
+
+
 def _parse_fallbacks(raw: str | None) -> tuple[str, ...]:
     if raw is None:
         return DEFAULT_FALLBACKS
@@ -92,18 +100,21 @@ def load_config() -> Config:
     if timeout <= 0:
         timeout = 60.0
     return Config(
-        model=os.environ.get("GATE_N_GUARD_MODEL", DEFAULT_MODEL),
-        endpoint=os.environ.get("HF_ENDPOINT") or None,
+        model=_env_text("GATE_N_GUARD_MODEL", DEFAULT_MODEL) or DEFAULT_MODEL,
+        endpoint=_env_optional("HF_ENDPOINT"),
         max_tokens=_env_int("GATE_N_GUARD_MAX_TOKENS", 2048, minimum=1),
         timeout=timeout,
         retries=_env_int("GATE_N_GUARD_RETRIES", 3, minimum=0),
         retry_backoff=_env_float("GATE_N_GUARD_RETRY_BACKOFF", 2.0, minimum=0.0),
         provider=engine,
         fallbacks=_parse_fallbacks(os.environ.get("GATE_N_GUARD_FALLBACKS")),
-        openrouter_api_key=os.environ.get("OPENROUTER_API_KEY") or None,
-        openrouter_base_url=os.environ.get("OPENROUTER_BASE_URL", DEFAULT_OPENROUTER_URL),
-        openrouter_site_url=os.environ.get("OPENROUTER_SITE_URL") or None,
-        openrouter_app_name=os.environ.get("OPENROUTER_APP_NAME") or None,
-        rulebook_path=os.environ.get("GATE_N_GUARD_RULEBOOK") or None,
-        journal_path=os.environ.get("GATE_N_GUARD_JOURNAL") or None,
+        openrouter_api_key=_env_optional("OPENROUTER_API_KEY"),
+        openrouter_base_url=(
+            _env_text("OPENROUTER_BASE_URL", DEFAULT_OPENROUTER_URL)
+            or DEFAULT_OPENROUTER_URL
+        ),
+        openrouter_site_url=_env_optional("OPENROUTER_SITE_URL"),
+        openrouter_app_name=_env_optional("OPENROUTER_APP_NAME"),
+        rulebook_path=_env_optional("GATE_N_GUARD_RULEBOOK"),
+        journal_path=_env_optional("GATE_N_GUARD_JOURNAL"),
     )

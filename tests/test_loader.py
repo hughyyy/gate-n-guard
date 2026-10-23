@@ -257,5 +257,42 @@ class LoaderRobustnessTests(unittest.TestCase):
             resolve_rulebook({**RULES, "extra": object()})
         self.assertIn("JSON-serializable", str(ctx.exception))
 
+
+class LoaderSourcePrecedenceTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "rules.json")
+        with open(self.path, "w", encoding="utf-8") as handle:
+            json.dump(RULES, handle)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_empty_inline_object_errors_and_never_uses_the_default(self):
+        with self.assertRaises(RulebookError) as ctx:
+            resolve_rulebook({}, default_path=self.path)
+        self.assertIn("rules list", str(ctx.exception))
+
+    def test_inline_list_does_not_fall_back_to_the_default(self):
+        with self.assertRaises(RulebookSourceError) as ctx:
+            resolve_rulebook([], default_path=self.path)
+        self.assertIn("list", str(ctx.exception))
+
+    def test_bom_prefixed_file_is_a_source_error(self):
+        bom = os.path.join(self.dir.name, "bom.json")
+        content = json.dumps(RULES).encode("utf-8")
+        with open(bom, "wb") as handle:
+            handle.write(b"\xef\xbb\xbf" + content)
+        with self.assertRaises(RulebookSourceError) as ctx:
+            resolve_rulebook(f"file:{bom}")
+        self.assertIn("not valid JSON", str(ctx.exception))
+
+    def test_attach_ref_copies_ref_keys_without_mutation(self):
+        ref = {"source": "inline", "sha256": "abc", "extra": "kept"}
+        attached = attach_ref({"verdict": "allow"}, ref)
+        self.assertEqual(attached["rulebook_ref"], ref)
+        attached["rulebook_ref"]["extra"] = "changed"
+        self.assertEqual(ref["extra"], "kept")
+
 if __name__ == "__main__":
     unittest.main()

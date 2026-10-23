@@ -497,5 +497,78 @@ class JournalRobustnessTests(unittest.TestCase):
                 os.environ["HOME"] = previous_home
 
 
+
+class JournalRoundTripTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "decisions.jsonl")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_note_with_newlines_and_unicode_round_trips(self):
+        note = "line one\nline two — 批准"
+        record_decision(self.path, action={"tool": "x"}, verdict="confirm", note=note)
+        with open(self.path, encoding="utf-8") as handle:
+            self.assertEqual(len(handle.readlines()), 1)
+        self.assertEqual(read_journal(self.path)["records"][0]["note"], note)
+
+    def test_final_line_without_a_trailing_newline_is_read(self):
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write('{"id": "a", "ts": "2026-01-01T00:00:00+00:00", "verdict": "allow"}')
+        self.assertEqual(read_journal(self.path)["count"], 1)
+
+    def test_crlf_journal_lines_are_read(self):
+        with open(self.path, "wb") as handle:
+            handle.write(
+                b'{"id": "a", "ts": "2026-01-01T00:00:00+00:00", "verdict": "allow"}\r\n'
+                b'{"id": "b", "ts": "2026-01-02T00:00:00+00:00", "verdict": "deny"}\r\n'
+            )
+        result = read_journal(self.path)
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["skipped"], 0)
+        self.assertEqual([r["id"] for r in result["records"]], ["b", "a"])
+
+    def test_parent_path_that_is_a_file_is_a_journal_error(self):
+        parent = os.path.join(self.dir.name, "parent")
+        with open(parent, "w", encoding="utf-8") as handle:
+            handle.write("not a directory")
+        with self.assertRaises(JournalError) as ctx:
+            record_decision(
+                os.path.join(parent, "j.jsonl"),
+                action={"tool": "x"},
+                verdict="allow",
+            )
+        self.assertIn("write failed", str(ctx.exception))
+
+    def test_record_id_and_timestamp_shape(self):
+        stored = record_decision(self.path, action={"tool": "x"}, verdict="allow")
+        self.assertEqual(len(stored["id"]), 32)
+        int(stored["id"], 16)
+        self.assertRegex(
+            stored["ts"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+\+00:00$"
+        )
+
+    def test_empty_optional_strings_are_preserved(self):
+        stored = record_decision(
+            self.path,
+            action={"tool": "x"},
+            verdict="deny",
+            outcome="",
+            actor="",
+            note="",
+        )
+        self.assertEqual((stored["outcome"], stored["actor"], stored["note"]), ("", "", ""))
+        self.assertEqual(read_journal(self.path)["records"][0]["note"], "")
+
+    def test_since_after_before_reads_nothing(self):
+        record_decision(self.path, action={"tool": "x"}, verdict="allow")
+        result = read_journal(
+            self.path,
+            since="2027-01-01T00:00:00+00:00",
+            before="2026-01-01T00:00:00+00:00",
+        )
+        self.assertEqual(result, {"count": 0, "skipped": 0, "records": []})
+
 if __name__ == "__main__":
     unittest.main()

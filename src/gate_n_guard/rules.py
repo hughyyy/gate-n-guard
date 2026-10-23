@@ -217,20 +217,45 @@ def _operand_predicate(path: str, operand: Any, rule_id: str) -> Predicate:
                 f"rule {rule_id!r}: {path}: unknown operator {operator!r}"
             )
         return _make_predicate(path, operator, value, rule_id)
+    if path == "tool" and not isinstance(operand, str):
+        raise RulebookError(
+            f"rule {rule_id!r}: tool: equality requires a string operand"
+        )
     return Predicate(path, "eq", operand)
 
 
 def _make_predicate(path: str, operator: str, value: Any, rule_id: str) -> Predicate:
     """Build a predicate, validating operator-specific operand shapes.
 
-    `matches` patterns are compiled here so a syntax error in the rulebook is
-    a load-time RulebookError, not a runtime surprise.
+    Every operand shape is checked here, so a rulebook can never carry a
+    predicate that errors (or silently never matches) at match time because
+    of its own operand. `matches` patterns are compiled too, so a syntax
+    error is a load-time RulebookError, not a runtime surprise.
     """
-    if operator == "matches":
-        if not isinstance(value, str):
+    if operator in ("glob", "contains", "matches") and not isinstance(value, str):
+        raise RulebookError(
+            f"rule {rule_id!r}: {path}: {operator!r} requires a string operand"
+        )
+    if operator == "in":
+        if not isinstance(value, list):
+            raise RulebookError(f"rule {rule_id!r}: {path}: 'in' requires a list")
+        if not value:
             raise RulebookError(
-                f"rule {rule_id!r}: {path}: 'matches' requires a string pattern"
+                f"rule {rule_id!r}: {path}: 'in' requires a non-empty list"
             )
+        if path == "tool" and not all(isinstance(item, str) for item in value):
+            raise RulebookError(
+                f"rule {rule_id!r}: tool: 'in' requires a list of strings"
+            )
+    if operator in ("lt", "lte", "gt", "gte") and not _is_number(value):
+        raise RulebookError(
+            f"rule {rule_id!r}: {path}: {operator!r} requires a numeric operand"
+        )
+    if path == "tool" and operator == "eq" and not isinstance(value, str):
+        raise RulebookError(
+            f"rule {rule_id!r}: tool: equality requires a string operand"
+        )
+    if operator == "matches":
         try:
             compiled = re.compile(value)
         except re.error as exc:
@@ -238,8 +263,6 @@ def _make_predicate(path: str, operator: str, value: Any, rule_id: str) -> Predi
                 f"rule {rule_id!r}: {path}: invalid regex pattern: {exc}"
             ) from exc
         return Predicate(path, operator, value, compiled)
-    if operator == "in" and not isinstance(value, list):
-        raise RulebookError(f"rule {rule_id!r}: {path}: 'in' requires a list")
     return Predicate(path, operator, value)
 
 

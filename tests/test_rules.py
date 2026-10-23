@@ -526,15 +526,23 @@ class OperandTypeTests(unittest.TestCase):
     def verdict_for(self, when, action):
         return check(book([rule("r", [when], "deny")]), action)["verdict"]
 
-    def test_numeric_comparisons_reject_non_numbers(self):
-        cases = (
-            ({"gt": True}, {"tool": "x", "arguments": {"n": 2}}),
-            ({"gt": 1}, {"tool": "x", "arguments": {"n": "2"}}),
-            ({"lt": 1}, {"tool": "x", "arguments": {"n": None}}),
-        )
-        for operand, action in cases:
-            with self.subTest(operand=operand), self.assertRaises(RulebookError) as ctx:
-                self.verdict_for({"arguments": {"n": operand}}, action)
+    def test_numeric_comparison_operands_are_checked_at_load(self):
+        for operand in (True, "1", None, [1]):
+            with self.subTest(operand=operand), self.assertRaises(
+                RulebookError
+            ) as ctx:
+                book([rule("r", [{"arguments": {"n": {"gt": operand}}}], "deny")])
+            self.assertIn("numeric operand", str(ctx.exception))
+
+    def test_numeric_comparisons_reject_non_number_action_values(self):
+        for value in ("2", None, True):
+            with self.subTest(value=value), self.assertRaises(
+                RulebookError
+            ) as ctx:
+                self.verdict_for(
+                    {"arguments": {"n": {"gt": 1}}},
+                    {"tool": "x", "arguments": {"n": value}},
+                )
             self.assertIn("requires numeric operands", str(ctx.exception))
 
     def test_string_operators_reject_non_strings(self):
@@ -555,16 +563,13 @@ class OperandTypeTests(unittest.TestCase):
             {"tool": "x", "arguments": {"n": True}},
         )
 
-    def test_string_operators_reject_non_string_operands(self):
-        # glob/contains operands are not type-checked at load (unlike matches),
-        # so a bad operand must still fail loudly at match time
-        for operator in ("glob", "contains"):
-            with self.subTest(operator=operator), self.assertRaises(RulebookError) as ctx:
-                self.verdict_for(
-                    {"arguments": {"n": {operator: 7}}},
-                    {"tool": "x", "arguments": {"n": "value"}},
-                )
-            self.assertIn("requires string operands", str(ctx.exception))
+    def test_string_operator_operands_are_checked_at_load(self):
+        for operator in ("glob", "contains", "matches"):
+            with self.subTest(operator=operator), self.assertRaises(
+                RulebookError
+            ) as ctx:
+                book([rule("r", [{"arguments": {"n": {operator: 7}}}], "deny")])
+            self.assertIn("requires a string operand", str(ctx.exception))
 
 
 class ResolutionTests(unittest.TestCase):
@@ -704,10 +709,10 @@ class GrammarEdgeCaseTests(unittest.TestCase):
             "deny",
         )
 
-    def test_in_empty_list_never_matches(self):
-        self.assertEqual(
-            self.verdict_for({"tool": {"in": []}}, {"tool": "bash"}), "allow"
-        )
+    def test_empty_in_list_is_a_load_error(self):
+        with self.assertRaises(RulebookError) as ctx:
+            book([rule("r", [{"tool": {"in": []}}], "deny")])
+        self.assertIn("non-empty list", str(ctx.exception))
 
     def test_rule_ids_must_be_unique(self):
         with self.assertRaises(RulebookError) as ctx:
@@ -743,6 +748,48 @@ class GrammarEdgeCaseTests(unittest.TestCase):
 
     def test_reason_defaults_to_empty_string(self):
         self.assertEqual(book([rule("r", [{"tool": "x"}], "deny")]).rules[0].reason, "")
+
+    def test_tool_operands_must_be_string_compatible(self):
+        for operand in (5, True, {"eq": 5}, {"in": [1, 2]}, {"glob": 5}):
+            with self.subTest(operand=operand), self.assertRaises(RulebookError):
+                book([rule("r", [{"tool": operand}], "deny")])
+
+    def test_situation_equality_may_use_any_json_type(self):
+        rbook = book([rule("r", [{"situation.total": 5}], "deny")])
+        self.assertEqual(check(rbook, {"tool": "x"}, {"total": 5})["verdict"], "deny")
+        self.assertEqual(check(rbook, {"tool": "x"}, {"total": "5"})["verdict"], "allow")
+
+    def test_glob_character_classes_and_question_marks(self):
+        classes = book([rule("r", [{"tool": {"glob": "file[0-9].txt"}}], "deny")])
+        self.assertEqual(check(classes, {"tool": "file5.txt"})["verdict"], "deny")
+        self.assertEqual(check(classes, {"tool": "fileX.txt"})["verdict"], "allow")
+        single = book([rule("r", [{"tool": {"glob": "file?.txt"}}], "deny")])
+        self.assertEqual(check(single, {"tool": "fileX.txt"})["verdict"], "deny")
+        self.assertEqual(check(single, {"tool": "file10.txt"})["verdict"], "allow")
+
+    def test_numeric_comparisons_mix_int_and_float(self):
+        rbook = book([rule("r", [{"situation.n": {"gte": 1.5}}], "deny")])
+        self.assertEqual(check(rbook, {"tool": "x"}, {"n": 2})["verdict"], "deny")
+        self.assertEqual(check(rbook, {"tool": "x"}, {"n": 1.5})["verdict"], "deny")
+        self.assertEqual(check(rbook, {"tool": "x"}, {"n": 1.49})["verdict"], "allow")
+        strict = book([rule("r", [{"situation.n": {"gt": 1}}], "deny")])
+        self.assertEqual(check(strict, {"tool": "x"}, {"n": 1.5})["verdict"], "deny")
+        self.assertEqual(check(strict, {"tool": "x"}, {"n": 1})["verdict"], "allow")
+
+    def test_in_with_mixed_types_uses_exact_membership(self):
+        when = {"situation.flag": {"in": ["1", 1, True]}}
+        self.assertEqual(self.verdict_for(when, {"tool": "x"}, {"flag": 1}), "deny")
+        self.assertEqual(self.verdict_for(when, {"tool": "x"}, {"flag": True}), "deny")
+        self.assertEqual(self.verdict_for(when, {"tool": "x"}, {"flag": "1"}), "deny")
+        self.assertEqual(self.verdict_for(when, {"tool": "x"}, {"flag": 1.0}), "allow")
+
+    def test_arguments_intermediate_list_is_a_missing_path(self):
+        rbook = book([
+            rule("r", [{"arguments": {"opts": {"path": {"contains": "x"}}}}], "deny"),
+        ])
+        with self.assertRaises(MissingPathError) as ctx:
+            check(rbook, {"tool": "x", "arguments": {"opts": [{"path": "/x"}]}})
+        self.assertIn("arguments.opts.path", str(ctx.exception))
 
 if __name__ == "__main__":
     unittest.main()

@@ -201,5 +201,41 @@ class ConfigBoundsTests(unittest.TestCase):
             self.assertEqual(_env_int("X_INT", 5, minimum=0), 0)
             self.assertEqual(_env_float("X_FLOAT", 2.0, minimum=0.0), 0.0)
 
+    def test_blank_and_whitespace_values_are_treated_as_unset(self):
+        env = {
+            "GATE_N_GUARD_MODEL": "   ",
+            "HF_ENDPOINT": " ",
+            "OPENROUTER_BASE_URL": "  ",
+            "OPENROUTER_API_KEY": " ",
+            "OPENROUTER_SITE_URL": " ",
+            "OPENROUTER_APP_NAME": " ",
+            "GATE_N_GUARD_RULEBOOK": "   ",
+            "GATE_N_GUARD_JOURNAL": " ",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            cfg = load_config()
+        self.assertEqual(cfg.model, DEFAULT_MODEL)
+        self.assertEqual(cfg.openrouter_base_url, DEFAULT_OPENROUTER_URL)
+        self.assertIsNone(cfg.endpoint)
+        self.assertIsNone(cfg.openrouter_api_key)
+        self.assertIsNone(cfg.openrouter_site_url)
+        self.assertIsNone(cfg.openrouter_app_name)
+        self.assertIsNone(cfg.rulebook_path)
+        self.assertIsNone(cfg.journal_path)
+
+    def test_surrounding_whitespace_is_trimmed(self):
+        env = {
+            "GATE_N_GUARD_MODEL": " hf:org/model ",
+            "GATE_N_GUARD_RULEBOOK": " /tmp/rules.json ",
+            "GATE_N_GUARD_JOURNAL": " /tmp/journal.jsonl ",
+            "OPENROUTER_API_KEY": " key ",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            cfg = load_config()
+        self.assertEqual(cfg.model, "hf:org/model")
+        self.assertEqual(cfg.rulebook_path, "/tmp/rules.json")
+        self.assertEqual(cfg.journal_path, "/tmp/journal.jsonl")
+        self.assertEqual(cfg.openrouter_api_key, "key")
+
 if __name__ == "__main__":
     unittest.main()

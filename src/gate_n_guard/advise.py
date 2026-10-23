@@ -183,7 +183,12 @@ def _build_messages(
 
 
 def _extract_json(text: str) -> dict:
-    """Pull one JSON object out of model output, tolerating fences/prose."""
+    """Pull one JSON object out of model output, tolerating fences/prose.
+
+    Scans for the first parseable object instead of slicing from the first
+    "{" to the last "}", because prose around the answer may contain braces.
+    A second parseable object is ambiguous and rejected.
+    """
     if not isinstance(text, str) or not text.strip():
         raise AdviseError("advisory model returned empty output")
     candidates = []
@@ -192,20 +197,35 @@ def _extract_json(text: str) -> dict:
         candidates.append(fenced.group(1))
     candidates.append(text)
     for candidate in candidates:
-        start = candidate.find("{")
-        end = candidate.rfind("}")
-        if start == -1 or end <= start:
-            continue
-        try:
-            payload = json.loads(candidate[start:end + 1])
-        except ValueError:
-            continue
-        if isinstance(payload, dict):
+        payload = _first_json_object(candidate)
+        if payload is not None:
             return payload
     raise AdviseError(
         "advisory model output was not a JSON object: "
         + repr(text[:200])
     )
+
+
+def _first_json_object(candidate: str):
+    decoder = json.JSONDecoder()
+    index = 0
+    found = None
+    while True:
+        start = candidate.find("{", index)
+        if start == -1:
+            return found
+        try:
+            payload, end = decoder.raw_decode(candidate, start)
+        except ValueError:
+            index = start + 1
+            continue
+        if isinstance(payload, dict):
+            if found is not None:
+                raise AdviseError(
+                    "advisory model output contains multiple JSON objects"
+                )
+            found = payload
+        index = end
 
 
 def _shape(question: str, payload: dict, rule_id: Optional[str]) -> dict:
@@ -216,53 +236,112 @@ def _shape(question: str, payload: dict, rule_id: Optional[str]) -> dict:
     """
     if question == "interpret":
         if rule_id is not None:
-            if not isinstance(payload.get("meaning"), str):
-                raise AdviseError("interpret: model output lacks a string 'meaning'")
-            _check_confidence(payload)
-            allowed = (
-                "meaning",
-                "permits",
-                "requires",
-                "forbids",
-                "edge_cases",
-                "confidence",
-            )
-            result = {key: payload[key] for key in allowed if key in payload}
+            result = _shape_interpretation(payload, "interpret")
             result["rule_id"] = rule_id
         else:
             entries = payload.get("interpretations")
-            if not isinstance(entries, list) or not all(
-                isinstance(entry, dict) for entry in entries
-            ):
+            if not isinstance(entries, list):
                 raise AdviseError(
                     "interpret: model output lacks an 'interpretations' list "
                     "of objects"
                 )
-            for entry in entries:
-                _check_confidence(entry)
-            result = {"interpretations": entries}
+            result = {"interpretations": [
+                _shape_interpretation(entry, "interpret", require_rule_id=True)
+                for entry in entries
+            ]}
     elif question == "apply":
         applicable = payload.get("applicable")
         if not isinstance(payload.get("summary"), str) or not isinstance(
             applicable, list
-        ) or not all(isinstance(entry, dict) for entry in applicable):
+        ):
             raise AdviseError(
                 "apply: model output must be an object with 'summary' (str) "
                 "and 'applicable' (list of objects)"
             )
-        allowed = ("summary", "applicable", "notable_missing")
-        result = {key: payload[key] for key in allowed if key in payload}
+        result = {
+            "summary": payload["summary"],
+            "applicable": [_shape_applicable(entry) for entry in applicable],
+        }
+        if "notable_missing" in payload:
+            result["notable_missing"] = _string_list(
+                payload, "notable_missing", "apply"
+            )
     else:
         gaps = payload.get("gaps")
         if payload.get("coverage") not in ("adequate", "partial", "none") or not (
-            isinstance(gaps, list) and all(isinstance(entry, dict) for entry in gaps)
+            isinstance(gaps, list)
         ):
             raise AdviseError(
                 "gap: model output must have 'coverage' "
                 "(adequate|partial|none) and 'gaps' (list of objects)"
             )
-        result = {"coverage": payload["coverage"], "gaps": gaps}
+        result = {
+            "coverage": payload["coverage"],
+            "gaps": [_shape_gap(entry) for entry in gaps],
+        }
     result["mode"] = "model"
+    return result
+
+
+def _string_list(container: dict, key: str, label: str) -> list:
+    value = container[key]
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) for item in value
+    ):
+        raise AdviseError(f"{label}: '{key}' must be a list of strings")
+    return list(value)
+
+
+def _shape_interpretation(
+    payload: dict, label: str, require_rule_id: bool = False
+) -> dict:
+    if not isinstance(payload, dict):
+        raise AdviseError(f"{label}: each interpretation must be an object")
+    if not isinstance(payload.get("meaning"), str):
+        raise AdviseError(f"{label}: model output lacks a string 'meaning'")
+    result = {"meaning": payload["meaning"]}
+    for key in ("permits", "requires", "forbids", "edge_cases"):
+        if key in payload:
+            result[key] = _string_list(payload, key, label)
+    _check_confidence(payload)
+    if "confidence" in payload:
+        result["confidence"] = payload["confidence"]
+    if require_rule_id:
+        rule = payload.get("rule_id")
+        if not isinstance(rule, str) or not rule:
+            raise AdviseError(
+                f"{label}: each interpretation needs a non-empty string "
+                "'rule_id'"
+            )
+        result["rule_id"] = rule
+    return result
+
+
+def _shape_applicable(entry: dict) -> dict:
+    if not isinstance(entry, dict):
+        raise AdviseError("apply: each applicable entry must be an object")
+    for key in ("rule_id", "relevance", "reading"):
+        value = entry.get(key)
+        if not isinstance(value, str) or not value:
+            raise AdviseError(
+                f"apply: each applicable entry needs a non-empty string "
+                f"'{key}'"
+            )
+    result = {key: entry[key] for key in ("rule_id", "relevance", "reading")}
+    if "caveats" in entry:
+        result["caveats"] = _string_list(entry, "caveats", "apply")
+    return result
+
+
+def _shape_gap(entry: dict) -> dict:
+    if not isinstance(entry, dict):
+        raise AdviseError("gap: each gap must be an object")
+    result = {}
+    for key in ("concern", "suggested_rule", "rationale"):
+        value = entry.get(key)
+        if not isinstance(value, str):
+            raise AdviseError(f"gap: each gap needs a string '{key}'")
+        result[key] = value
     return result
 
 

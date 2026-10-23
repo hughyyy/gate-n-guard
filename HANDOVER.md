@@ -25,7 +25,7 @@ weigh-n-decide, gate-n-guard).
 
 ## Current state (verified 2026-10-23)
 
-- **328 tests pass** (`.venv/bin/python -m unittest discover -s tests -q`,
+- **373 tests pass** (`.venv/bin/python -m unittest discover -s tests -q`,
   zero dev deps): matcher (both precedence modes, predicates, the full
   validation matrix, deep type-strict equality, operand-type errors,
   resolution, determinism), journal (append/filters/bounds/ordering, five
@@ -220,7 +220,7 @@ enums, an untyped `rules`, an optional `check.action`, no annotations, no
 | `audit limit=5000` | `isError: true`, `less_than_or_equal` |
 | `advise question="explain"` | `isError: true`, literal_error naming the three questions |
 | `check rules="nope"` (handler error) | `isError: true`, body `{"error": "rules string must be a 'file:<path>' ref or inline JSON, got 'nope'"}` |
-| suite | `Ran 328 tests` — `OK` |
+| suite | `Ran 373 tests` — `OK` |
 
 ## Known issues / notes
 

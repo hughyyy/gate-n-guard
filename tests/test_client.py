@@ -462,5 +462,70 @@ class MalformedHfPayloadTests(unittest.TestCase):
         self.assertEqual(completion.usage, {"total_tokens": 3})
         self.assertEqual(completion.text, "hi")
 
+
+class MixedProviderFallbackTests(unittest.TestCase):
+    def test_fallback_can_switch_provider(self):
+        fake = FakeInferenceClient()
+        client = AdvisoryClient(
+            config(
+                model="openrouter:model-a",
+                fallbacks=("hf:org/alt",),
+                retries=0,
+            ),
+            fake,
+        )
+        client._openrouter = Recording(exc=status_error(500))
+        completion = client.complete_with_meta(
+            [{"role": "user", "content": "hi"}]
+        )
+        self.assertEqual(completion.model, "hf:org/alt")
+        self.assertEqual(completion.provider, "hf")
+        self.assertEqual(completion.transport, "_HFTransport")
+        self.assertEqual(fake.calls[0]["model"], "org/alt")
+
+    def test_fallback_error_names_only_candidates_actually_tried(self):
+        class FailingInference:
+            def chat_completion(self, *, messages, model, max_tokens):
+                raise httpx.ConnectError("hf down")
+
+        client = AdvisoryClient(
+            config(
+                model="openrouter:model-a",
+                fallbacks=("hf:org/alt", "hf:org/alt"),
+                retries=0,
+                openrouter_api_key=None,
+            ),
+            FailingInference(),
+        )
+        with self.assertRaises(InferenceError) as ctx:
+            client.complete([{"role": "user", "content": "hi"}])
+        message = str(ctx.exception)
+        # once in the tried list, once in that candidate's error detail
+        self.assertEqual(message.count("openrouter:model-a"), 2)
+        self.assertEqual(message.count("hf:org/alt"), 2)
+
+
+class HfContentShapeTests(unittest.TestCase):
+    def test_non_string_content_is_a_clear_inference_error(self):
+        reply = SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(content={"a": 1}), finish_reason="stop"
+            )],
+            usage=None,
+        )
+        fake = mock.Mock()
+        fake.chat_completion.return_value = reply
+        client = AdvisoryClient(
+            config(model="org/model", provider="hf", retries=0), fake
+        )
+        with self.assertRaises(InferenceError) as ctx:
+            client.complete([{"role": "user", "content": "hi"}])
+        self.assertIn("content is not a string", str(ctx.exception))
+
+
+class IntegerErrorMessageTests(unittest.TestCase):
+    def test_integer_api_message_is_rendered(self):
+        self.assertEqual(_describe_error(body_error(429, {"error": 42})), "429: 42")
+
 if __name__ == "__main__":
     unittest.main()
