@@ -8,7 +8,12 @@ import unittest
 
 from gate_n_guard.rules import (
     MissingPathError,
+    Predicate,
+    Rule,
+    Rulebook,
     RulebookError,
+    _resolve,
+    _satisfies,
     check,
     load_rulebook,
 )
@@ -356,6 +361,269 @@ class TraceTests(unittest.TestCase):
             first = check(rbook, ACTION, SITUATION)
             second = check(rbook, ACTION, SITUATION)
             self.assertEqual(first, second, f"nondeterministic in {precedence}")
+
+
+class RulebookValidationTests(unittest.TestCase):
+    def assertInvalid(self, data, needle):
+        with self.assertRaises(RulebookError) as ctx:
+            load_rulebook(data)
+        self.assertIn(needle, str(ctx.exception))
+
+    def test_rulebook_must_be_an_object(self):
+        for data in ([], "rules", 1, None):
+            with self.subTest(data=data):
+                self.assertInvalid(data, "JSON object")
+
+    def test_rules_list_must_be_present_and_non_empty(self):
+        for data in ({}, {"rules": []}, {"rules": {}}):
+            with self.subTest(data=data):
+                self.assertInvalid(data, "non-empty rules list")
+
+    def test_rule_must_be_an_object(self):
+        self.assertInvalid({"rules": ["bash"]}, "rules[0]: rule must be an object")
+
+    def test_rule_id_must_be_a_non_empty_string(self):
+        for rule_id in (None, "", 7):
+            with self.subTest(rule_id=rule_id):
+                self.assertInvalid(
+                    {"rules": [{"id": rule_id, "when": [{"tool": "bash"}], "verdict": "deny"}]},
+                    "non-empty string id",
+                )
+
+    def test_reason_must_be_a_string(self):
+        self.assertInvalid(
+            {"rules": [{"id": "r", "when": [{"tool": "bash"}], "verdict": "deny", "reason": 5}]},
+            "reason must be a string",
+        )
+
+    def test_when_must_be_a_non_empty_list(self):
+        for when in (None, [], {}, "bash"):
+            with self.subTest(when=when):
+                self.assertInvalid(
+                    {"rules": [{"id": "r", "when": when, "verdict": "deny"}]},
+                    "when must be a non-empty list",
+                )
+
+    def test_when_entry_must_be_a_non_empty_object(self):
+        for entry in ({}, [], "x", 3):
+            with self.subTest(entry=entry):
+                self.assertInvalid(
+                    {"rules": [{"id": "r", "when": [entry], "verdict": "deny"}]},
+                    "each when entry must be a non-empty object",
+                )
+
+    def test_arguments_must_be_a_non_empty_object(self):
+        for arguments in ({}, [], "x"):
+            with self.subTest(arguments=arguments):
+                self.assertInvalid(
+                    {"rules": [{"id": "r", "when": [{"arguments": arguments}], "verdict": "deny"}]},
+                    "arguments must be a non-empty object",
+                )
+
+    def test_two_operators_in_one_object_rejected(self):
+        self.assertInvalid(
+            {"rules": [{"id": "r", "when": [
+                {"arguments": {"command": {"contains": "x", "glob": "y"}}}
+            ], "verdict": "deny"}]},
+            "at most one operator",
+        )
+
+    def test_operator_with_extra_keys_rejected(self):
+        self.assertInvalid(
+            {"rules": [{"id": "r", "when": [
+                {"arguments": {"command": {"contains": "x", "extra": 1}}}
+            ], "verdict": "deny"}]},
+            "must be the only key",
+        )
+
+    def test_unknown_operator_rejected(self):
+        self.assertInvalid(
+            {"rules": [{"id": "r", "when": [{"tool": {"regex": "x"}}], "verdict": "deny"}]},
+            "unknown operator",
+        )
+
+    def test_in_requires_a_list(self):
+        self.assertInvalid(
+            {"rules": [{"id": "r", "when": [{"tool": {"in": "bash"}}], "verdict": "deny"}]},
+            "'in' requires a list",
+        )
+
+    def test_argument_key_colliding_with_an_operator_is_a_load_error(self):
+        # "in" is an operator name, so it is read as one at a leaf position
+        self.assertInvalid(
+            {"rules": [{"id": "r", "when": [{"arguments": {"in": "x"}}], "verdict": "deny"}]},
+            "'in' requires a list",
+        )
+
+
+class ActionValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.rbook = book([rule("deny-bash", [{"tool": "bash"}], "deny")])
+
+    def test_action_must_be_an_object_with_a_non_empty_tool(self):
+        for action in ({}, {"tool": ""}, {"tool": 1}, {"arguments": {}}, "bash", None, ["bash"]):
+            with self.subTest(action=action), self.assertRaises(RulebookError) as ctx:
+                check(self.rbook, action)
+            self.assertIn("non-empty string tool", str(ctx.exception))
+
+    def test_situation_must_be_an_object(self):
+        for situation in ([], "prod", 7):
+            with self.subTest(situation=situation), self.assertRaises(RulebookError) as ctx:
+                check(self.rbook, {"tool": "bash"}, situation)
+            self.assertIn("situation must be an object", str(ctx.exception))
+
+    def test_situation_defaults_to_empty(self):
+        self.assertEqual(check(self.rbook, {"tool": "bash"})["verdict"], "deny")
+
+
+def matches_value(want, value):
+    """Does an eq predicate with operand `want` match the action value `value`?"""
+    rbook = book([
+        rule("r", [{"tool": "x", "arguments": {"value": {"eq": want}}}], "deny"),
+    ])
+    return check(rbook, {"tool": "x", "arguments": {"value": value}})["verdict"] == "deny"
+
+
+class EqualityDepthTests(unittest.TestCase):
+    def test_scalars_are_type_strict(self):
+        self.assertTrue(matches_value(1, 1))
+        self.assertFalse(matches_value(True, 1))
+        self.assertFalse(matches_value(1, True))
+        self.assertFalse(matches_value(1, 1.0))
+        self.assertFalse(matches_value("1", 1))
+        self.assertTrue(matches_value(None, None))
+
+    def test_lists_compare_elementwise(self):
+        self.assertTrue(matches_value([1, 2], [1, 2]))
+        self.assertFalse(matches_value([1, 2], [1, 2, 3]))
+        self.assertFalse(matches_value([1], [1.0]))
+        self.assertTrue(matches_value([1, [2]], [1, [2]]))
+        self.assertFalse(matches_value([1, [2]], [1, [2.0]]))
+        self.assertTrue(matches_value([], []))
+
+    def test_dicts_compare_keys_and_values(self):
+        self.assertTrue(matches_value({"a": 1, "b": [2]}, {"b": [2], "a": 1}))
+        self.assertFalse(matches_value({"a": 1}, {"a": True}))
+        self.assertFalse(matches_value({"a": 1}, {"a": 1, "b": 2}))
+
+    def test_container_type_mismatch_is_false(self):
+        self.assertFalse(matches_value({"a": 1}, [("a", 1)]))
+        self.assertFalse(matches_value([1], 1))
+
+
+class OperandTypeTests(unittest.TestCase):
+    def verdict_for(self, when, action):
+        return check(book([rule("r", [when], "deny")]), action)["verdict"]
+
+    def test_numeric_comparisons_reject_non_numbers(self):
+        cases = (
+            ({"gt": True}, {"tool": "x", "arguments": {"n": 2}}),
+            ({"gt": 1}, {"tool": "x", "arguments": {"n": "2"}}),
+            ({"lt": 1}, {"tool": "x", "arguments": {"n": None}}),
+        )
+        for operand, action in cases:
+            with self.subTest(operand=operand), self.assertRaises(RulebookError) as ctx:
+                self.verdict_for({"arguments": {"n": operand}}, action)
+            self.assertIn("requires numeric operands", str(ctx.exception))
+
+    def test_string_operators_reject_non_strings(self):
+        for operator in ("glob", "contains", "matches"):
+            with self.subTest(operator=operator), self.assertRaises(RulebookError) as ctx:
+                self.verdict_for(
+                    {"arguments": {"n": {operator: "x"}}},
+                    {"tool": "x", "arguments": {"n": 1}},
+                )
+            self.assertIn("requires string operands", str(ctx.exception))
+
+    def test_bool_is_not_a_number_for_comparisons(self):
+        # True is an int subclass; the matcher refuses it as a numeric operand
+        self.assertRaises(
+            RulebookError,
+            self.verdict_for,
+            {"arguments": {"n": {"gt": 0}}},
+            {"tool": "x", "arguments": {"n": True}},
+        )
+
+
+class ResolutionTests(unittest.TestCase):
+    def test_nested_arguments_expand_to_dotted_paths(self):
+        rbook = book([
+            rule("r", [{"arguments": {"options": {"path": {"contains": "secrets"}}}}], "deny"),
+        ])
+        predicate = rbook.rules[0].entries[0][0]
+        self.assertEqual(predicate.path, "arguments.options.path")
+        action = {"tool": "x", "arguments": {"options": {"path": "/etc/secrets"}}}
+        self.assertEqual(check(rbook, action)["verdict"], "deny")
+
+    def test_missing_or_non_object_arguments_are_missing_paths(self):
+        rbook = book([rule("r", [{"arguments": {"command": {"contains": "rm"}}}], "deny")])
+        for action in ({"tool": "x"}, {"tool": "x", "arguments": None}, {"tool": "x", "arguments": {}}):
+            with self.subTest(action=action), self.assertRaises(MissingPathError):
+                check(rbook, action)
+
+    def test_unreachable_grammar_asserts(self):
+        # defensive invariants: the predicate grammar is closed
+        with self.assertRaises(AssertionError):
+            _resolve("bogus", {}, {})
+        with self.assertRaises(AssertionError):
+            _satisfies(Predicate("tool", "bogus", 1), "x")
+
+    def test_strictest_consults_rulebooks_even_when_a_rule_already_denies(self):
+        rbook = book([
+            rule("deny-bash", [{"tool": "bash"}], "deny"),
+            rule("needs-agent", [{"situation.agent": "ci-bot"}], "confirm"),
+        ], precedence="strictest")
+        # every rule is consulted, so the absent situation path is an error here
+        with self.assertRaises(MissingPathError):
+            check(rbook, ACTION)
+        self.assertEqual(check(rbook, ACTION, {"agent": "ci-bot"})["verdict"], "deny")
+
+
+class PredicateSemanticsTests(unittest.TestCase):
+    def verdict_for(self, when, action, default="allow"):
+        return check(book([rule("r", [when], "deny")], default=default), action)["verdict"]
+
+    def test_glob_is_case_sensitive(self):
+        self.assertEqual(self.verdict_for({"tool": {"glob": "bash*"}}, {"tool": "bash"}), "deny")
+        self.assertEqual(self.verdict_for({"tool": {"glob": "bash*"}}, {"tool": "Bash"}), "allow")
+
+    def test_contains_is_a_substring_test(self):
+        self.assertEqual(
+            self.verdict_for({"tool": {"contains": ""}}, {"tool": "anything"}), "deny"
+        )
+        self.assertEqual(
+            self.verdict_for({"tool": {"contains": "sh"}}, {"tool": "bash"}), "deny"
+        )
+        self.assertEqual(
+            self.verdict_for({"tool": {"contains": "sh"}}, {"tool": "read"}), "allow"
+        )
+
+    def test_matches_searches_anywhere_in_the_string(self):
+        self.assertEqual(
+            self.verdict_for({"tool": {"matches": "push"}}, {"tool": "git push --force"}), "deny"
+        )
+        self.assertEqual(
+            self.verdict_for({"tool": {"matches": "^push$"}}, {"tool": "git push"}), "allow"
+        )
+
+    def test_in_is_membership(self):
+        when = {"tool": {"in": ["bash", "zsh"]}}
+        self.assertEqual(self.verdict_for(when, {"tool": "zsh"}), "deny")
+        self.assertEqual(self.verdict_for(when, {"tool": "read"}), "allow")
+
+
+class DataclassShapeTests(unittest.TestCase):
+    def test_rulebook_and_rule_are_frozen_data(self):
+        rbook = load_rulebook({"rules": [rule("r", [{"tool": "bash"}], "deny", "why")]})
+        self.assertIsInstance(rbook, Rulebook)
+        loaded = rbook.rules[0]
+        self.assertIsInstance(loaded, Rule)
+        self.assertEqual((loaded.id, loaded.verdict, loaded.reason), ("r", "deny", "why"))
+        self.assertEqual(loaded.entries, ((Predicate("tool", "eq", "bash"),),))
+        with self.assertRaises(Exception):
+            loaded.verdict = "allow"
+        with self.assertRaises(Exception):
+            rbook.default = "deny"
 
 
 if __name__ == "__main__":

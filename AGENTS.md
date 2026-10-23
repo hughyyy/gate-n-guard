@@ -74,6 +74,10 @@ implementing.
   precedence, ref hashing, `attach_ref`), the advise orchestration (fake
   client), and the engine client (fake transports: retries, fallback chain,
   routing). No network, no keys.
+- `python tools/coverage.py` — line coverage over function bodies
+  (`sys.monitoring`, stdlib only); exits 1 if any line is uncovered.
+- `python tools/mutation.py` — mutation spot-check; exits 1 if a seeded bug
+  survives the suite (a survivor means a missing test).
 - Server must start and register all four tools with no keys present and no
   journal configured (`check` fully functional offline; `record`/`audit`
   error clearly on use; `advise` builds its client lazily — clear error on

@@ -25,14 +25,25 @@ weigh-n-decide, gate-n-guard).
 
 ## Current state (verified 2026-10-23)
 
-- **129 tests pass** (`.venv/bin/python -m unittest discover -s tests -q`,
-  zero dev deps): matcher (both precedence modes, predicates, errors,
-  determinism), journal (append/filters/malformed-line tolerance), loader
-  (sources, ref hashing), advise (deterministic apply, escalation, shapes),
-  client (retries, fallback chain, routing), server (registration, wiring with
-  injected fakes, and — 9 tests — the advertised contract: instructions,
-  schema enums/bounds/required, annotations, `isError`). Three added
-  2026-10-23 defend the prompt fixes below.
+- **268 tests pass** (`.venv/bin/python -m unittest discover -s tests -q`,
+  zero dev deps): matcher (both precedence modes, predicates, the full
+  validation matrix, deep type-strict equality, operand-type errors,
+  resolution, determinism), journal (append/filters/bounds/ordering, five
+  classes of malformed line, record/audit validation), loader (sources, ref
+  hashing, every source error), advise (deterministic apply, escalation,
+  prompts, extraction, all shape contracts), client (retries and budgets,
+  fallback chain, routing, metadata, both transports), openrouter (request
+  shape, headers, 399/400 boundary, malformed bodies, content parts), config
+  (env parsing, invalid values, routing helpers), server (registration,
+  wiring, the advertised contract, end-to-end tool calls, `main()`).
+- **Coverage is measured, not claimed (2026-10-23)**: `tools/coverage.py`
+  (stdlib `sys.monitoring`, no dev deps) reports **740/740 function-body
+  lines, 100%**; `tools/mutation.py` seeds 24 plausible bugs (precedence
+  inversion, type-loose equality, filter bounds, retry-budget off-by-one,
+  dropped shape checks, unset `isError`, dropped `rules` param, …) and gets
+  **24/24 killed**. Two mutants survived the first run — the limit clamp and
+  the retry budget — and the two tests added for them are the reason those
+  numbers hold; keep that habit.
 - **Full live test campaign through the registered OMP server (~45 calls,
   2026-10-23)**: all four tools exercised. Highlights beyond the standing
   smoke: `strictest` mode deny-dominance and all-consulted trace; type-strict

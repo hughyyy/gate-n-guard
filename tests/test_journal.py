@@ -8,7 +8,9 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
+from gate_n_guard import journal as journal_mod
 from gate_n_guard.journal import JournalError, read_journal, record_decision
 
 
@@ -182,6 +184,183 @@ class AuditTests(unittest.TestCase):
             read_journal(self.path, since="not-a-time")
         with self.assertRaises(JournalError):
             read_journal(self.path, tool="")
+
+
+class RecordValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "decisions.jsonl")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_action_must_have_a_non_empty_string_tool(self):
+        for action in ({}, {"tool": ""}, {"tool": 1}, {"arguments": {}}, "bash", None, ["bash"]):
+            with self.subTest(action=action), self.assertRaises(JournalError) as ctx:
+                record_decision(self.path, action=action, verdict="allow")
+            self.assertIn("action", str(ctx.exception))
+
+    def test_verdict_must_be_known(self):
+        for verdict in ("maybe", "", None, "ALLOW", 1):
+            with self.subTest(verdict=verdict), self.assertRaises(JournalError):
+                record_decision(self.path, action={"tool": "bash"}, verdict=verdict)
+
+    def test_matched_must_be_a_list_of_non_empty_strings(self):
+        for matched in ("no-rm", ["ok", ""], ["ok", 2], [None], {}, 1):
+            with self.subTest(matched=matched), self.assertRaises(JournalError) as ctx:
+                record_decision(
+                    self.path, action={"tool": "bash"}, verdict="deny", matched=matched
+                )
+            self.assertIn("matched", str(ctx.exception))
+
+    def test_optional_fields_must_be_strings_when_present(self):
+        for name in ("rulebook", "outcome", "actor", "note"):
+            with self.subTest(field=name), self.assertRaises(JournalError) as ctx:
+                record_decision(
+                    self.path, action={"tool": "bash"}, verdict="allow", **{name: 5}
+                )
+            self.assertIn(name, str(ctx.exception))
+
+    def test_rejected_records_write_nothing(self):
+        with self.assertRaises(JournalError):
+            record_decision(self.path, action={"tool": ""}, verdict="allow")
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_unconfigured_journal_errors_for_both_tools(self):
+        with self.assertRaises(JournalError) as ctx:
+            record_decision(None, action={"tool": "bash"}, verdict="allow")
+        self.assertIn("GATE_N_GUARD_JOURNAL", str(ctx.exception))
+        with self.assertRaises(JournalError) as ctx:
+            read_journal(None)
+        self.assertIn("GATE_N_GUARD_JOURNAL", str(ctx.exception))
+
+
+class AuditValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "decisions.jsonl")
+        self.write_lines(
+            {"id": "1", "ts": "2026-01-01T00:00:00+00:00", "verdict": "allow",
+             "action": {"tool": "read"}},
+            {"id": "2", "ts": "2026-01-02T00:00:00+00:00", "verdict": "deny",
+             "action": {"tool": "bash"}},
+            {"id": "3", "ts": "2026-01-03T00:00:00+00:00", "verdict": "confirm",
+             "action": {"tool": "deploy"}},
+        )
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def write_lines(self, *records):
+        with open(self.path, "w", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record) + "\n")
+
+    def test_limit_must_be_a_positive_integer(self):
+        for limit in (0, -1, True, "5", 1.5, None):
+            with self.subTest(limit=limit), self.assertRaises(JournalError) as ctx:
+                read_journal(self.path, limit=limit)
+            self.assertIn("limit", str(ctx.exception))
+
+    def test_oversized_limit_is_capped_not_rejected(self):
+        # lower the cap so the assertion does not need 1000+ records
+        with mock.patch.object(journal_mod, "MAX_AUDIT_LIMIT", 2):
+            result = read_journal(self.path, limit=10**9)
+        self.assertEqual(result["count"], 2)
+
+    def test_verdict_filter_must_be_known(self):
+        with self.assertRaises(JournalError):
+            read_journal(self.path, verdict="maybe")
+
+    def test_filter_strings_must_be_non_empty(self):
+        for field in ("tool", "outcome"):
+            for value in ("", 1, []):
+                with self.subTest(field=field, value=value), self.assertRaises(JournalError):
+                    read_journal(self.path, **{field: value})
+
+    def test_time_filters_must_be_parseable_iso_strings(self):
+        for value in (1, "", "not-a-time", "2026-13-40T00:00:00+00:00", "2026-01-01"):
+            with self.subTest(value=value), self.assertRaises(JournalError):
+                read_journal(self.path, since=value)
+
+    def test_since_is_inclusive_and_before_is_exclusive(self):
+        result = read_journal(self.path, since="2026-01-02T00:00:00+00:00",
+                              before="2026-01-03T00:00:00+00:00")
+        self.assertEqual([r["id"] for r in result["records"]], ["2"])
+
+    def test_z_suffixed_timestamps_are_accepted(self):
+        self.write_lines(
+            {"id": "z", "ts": "2026-02-01T12:00:00Z", "verdict": "allow",
+             "action": {"tool": "read"}},
+        )
+        self.assertEqual(read_journal(self.path)["records"][0]["id"], "z")
+
+
+class MalformedLineTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "decisions.jsonl")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def write_raw(self, text):
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def test_blank_lines_are_skipped_and_counted(self):
+        self.write_raw(
+            '{"id": "1", "ts": "2026-01-01T00:00:00+00:00", "verdict": "allow"}\n'
+            "\n"
+            "   \n"
+        )
+        result = read_journal(self.path)
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["skipped"], 2)
+
+    def test_non_object_json_is_skipped(self):
+        self.write_raw('[]\n"a string"\n12\nnull\n')
+        self.assertEqual(read_journal(self.path)["skipped"], 4)
+
+    def test_records_missing_required_keys_are_skipped(self):
+        self.write_raw(
+            '{"ts": "2026-01-01T00:00:00+00:00", "verdict": "allow"}\n'
+            '{"id": "2", "verdict": "allow"}\n'
+            '{"id": "3", "ts": "2026-01-01T00:00:00+00:00"}\n'
+        )
+        result = read_journal(self.path)
+        self.assertEqual((result["count"], result["skipped"]), (0, 3))
+
+    def test_unparseable_or_naive_timestamps_are_skipped(self):
+        self.write_raw(
+            '{"id": "1", "ts": 12, "verdict": "allow"}\n'
+            '{"id": "2", "ts": "2026-01-01T00:00:00", "verdict": "allow"}\n'
+            '{"id": "3", "ts": "nonsense", "verdict": "allow"}\n'
+        )
+        result = read_journal(self.path)
+        self.assertEqual((result["count"], result["skipped"]), (0, 3))
+
+    def test_tool_filter_skips_records_without_an_action_object(self):
+        self.write_raw(
+            '{"id": "1", "ts": "2026-01-01T00:00:00+00:00", "verdict": "allow", "action": "bash"}\n'
+            '{"id": "2", "ts": "2026-01-02T00:00:00+00:00", "verdict": "allow", "action": {"tool": "bash"}}\n'
+        )
+        result = read_journal(self.path, tool="bash")
+        self.assertEqual([r["id"] for r in result["records"]], ["2"])
+
+    def test_missing_file_is_an_empty_journal(self):
+        result = read_journal(os.path.join(self.dir.name, "never-written.jsonl"))
+        self.assertEqual(result, {"count": 0, "skipped": 0, "records": []})
+
+    def test_equal_timestamps_produce_a_deterministic_order(self):
+        self.write_raw(
+            '{"id": "a", "ts": "2026-01-01T00:00:00+00:00", "verdict": "allow"}\n'
+            '{"id": "b", "ts": "2026-01-01T00:00:00+00:00", "verdict": "deny"}\n'
+        )
+        first = [r["id"] for r in read_journal(self.path)["records"]]
+        second = [r["id"] for r in read_journal(self.path)["records"]]
+        self.assertEqual(first, second)
+        self.assertEqual(sorted(first), ["a", "b"])
 
 
 if __name__ == "__main__":

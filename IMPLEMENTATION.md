@@ -46,13 +46,22 @@ src/gate_n_guard/
                      #   errors + main()
   __main__.py        # SHIPPED: python -m gate_n_guard
 tests/
-  test_rules.py      # matcher: precedence, predicates, errors, determinism
-  test_journal.py    # append/read, filters, malformed-line tolerance
-  test_loader.py     # sources, ref hashing, attach_ref
-  test_advise.py     # deterministic apply, escalation, shapes (fake client)
-  test_client.py     # retries, fallback chain, routing (fake transports)
-  test_server.py     # registration, handler wiring, and the advertised
-                     #   contract (instructions, schemas, annotations, isError)
+  test_rules.py      # matcher: precedence, predicates, validation matrix,
+                     #   deep equality, operand types, resolution, determinism
+  test_journal.py    # append/read, filters and bounds, ordering, malformed
+                     #   lines, record/audit validation
+  test_loader.py     # sources, ref hashing, attach_ref, source errors
+  test_advise.py     # deterministic apply, escalation, prompts, extraction,
+                     #   shape checks (fake client)
+  test_client.py     # retries, budgets, fallback chain, routing, metadata,
+                     #   both transports (fake transports)
+  test_openrouter.py # request shape, headers, status boundaries, parsing
+  test_config.py     # env parsing, defaults, invalid values, routing helpers
+  test_server.py     # registration, handler wiring, advertised contract,
+                     #   end-to-end tool calls, isError
+tools/
+  coverage.py        # line-coverage report (sys.monitoring, stdlib only)
+  mutation.py        # mutation spot-check: seeded bugs must fail the suite
 ```
 
 ## Config (env vars)
@@ -112,7 +121,7 @@ test claims otherwise.
 
 None for v1 scope: all seven design questions are resolved (Q7: static
 reasons) and every module — matcher, journal, loader, advise, engines,
-server, entry point — ships with tests (129). Live advisory calls with
+server, entry point — ships with tests (268). Live advisory calls with
 real keys ran through the registered OMP server (2026-10-23: interpret
 single/whole, apply model-mode, apply auto escalation, gap), and the
 without-keys error path was live-verified against a fresh keyless
@@ -123,13 +132,40 @@ quality/latency like look-n-see did before release.
 
 - `python -m compileall` / import smoke after changes.
 - `.venv/bin/python -m unittest discover -s tests -q` — the offline suite
-  (matcher, journal, loader, advise, client; no network).
+  (268 tests; no network, no keys, no journal required).
+- `python tools/coverage.py` — line coverage over function bodies using
+  `sys.monitoring` (stdlib only). Current: **740/740 lines, 100%**. The
+  measurement deliberately excludes module-level statements (they run at
+  import), class bodies, and signature/decorator lines, which never emit
+  LINE events; everything a function actually does is counted.
+- `python tools/mutation.py` — mutation spot-check: 24 seeded bugs (precedence
+  inversion, type-loose equality, filter bounds, retry budget off-by-one,
+  dropped shape checks, unset `isError`, dropped `rules` param, …) must each
+  fail the suite. Current: **24/24 killed, 0 survivors**. A survivor means a
+  behaviour nothing defends — add the test, not the mutant.
 - The advertised contract is asserted offline in
   `tests/test_server.py::AdvertisementTests` (instructions, `serverInfo`
   version, required/enum/bound schema fields, annotations, `isError` on
   handler failures, schema rejection before the handler) — no harness needed.
+- End-to-end tool calls (record→audit, filters, check/advise with the env
+  rulebook, `main()` stdio dispatch) run in
+  `tests/test_server.py::ToolCallTests`.
 - Live advisory calls are manual smoke (real MCP call through the harness),
   not part of the suite.
+
+### Test-selection rules used here
+
+Each test defends an observable contract: a verdict, a trace field, an error
+message, an ordering, a bound, a protocol field. Not tested: source text,
+incidental formatting, third-party internals. Edge-case inventory per module:
+both precedence modes and their tie behaviour; type-strict equality over
+scalars, lists, and dicts; every operator's operand-type errors; missing-path
+short-circuit order; rulebook validation for every field; journal filters at
+their inclusive/exclusive boundaries, limit bounds, and five kinds of
+malformed line; loader source precedence and every failure mode; retry budget,
+backoff schedule, dedupe, and fallback chain composition; OpenRouter status
+boundary (399/400), malformed bodies, and content-part shapes; advise mode
+escalation and all four shape contracts; the MCP advertisement itself.
 
 ## Release plan
 

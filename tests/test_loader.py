@@ -125,5 +125,83 @@ class LoaderTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "deny")
 
 
+class LoaderEdgeCaseTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "rules.json")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_rules_of_the_wrong_type_name_the_type(self):
+        for value in (42, 3.5, ["rules"], True):
+            with self.subTest(value=value), self.assertRaises(RulebookSourceError) as ctx:
+                resolve_rulebook(value)
+            self.assertIn(type(value).__name__, str(ctx.exception))
+
+    def test_ref_to_a_directory_is_not_a_file(self):
+        with self.assertRaises(RulebookSourceError) as ctx:
+            resolve_rulebook(f"file:{self.dir.name}")
+        self.assertIn("not found", str(ctx.exception))
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores file permissions")
+    def test_unreadable_file_reports_eacces(self):
+        self.write_rules()
+        os.chmod(self.path, 0o000)
+        try:
+            with self.assertRaises(RulebookSourceError) as ctx:
+                resolve_rulebook(f"file:{self.path}")
+        finally:
+            os.chmod(self.path, 0o600)
+        self.assertIn("unreadable", str(ctx.exception))
+
+    def test_invalid_json_is_a_source_error(self):
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write("{not json")
+        with self.assertRaises(RulebookSourceError) as ctx:
+            resolve_rulebook(f"file:{self.path}")
+        self.assertIn("not valid JSON", str(ctx.exception))
+
+    def test_empty_file_is_a_source_error(self):
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write("")
+        with self.assertRaises(RulebookSourceError):
+            resolve_rulebook(f"file:{self.path}")
+
+    def test_default_path_missing_file_is_a_source_error(self):
+        missing = os.path.join(self.dir.name, "absent.json")
+        with self.assertRaises(RulebookSourceError) as ctx:
+            resolve_rulebook(None, default_path=missing)
+        self.assertIn("not found", str(ctx.exception))
+
+    def test_default_path_is_used_when_rules_are_omitted(self):
+        self.write_rules()
+        rulebook, ref = resolve_rulebook(None, default_path=self.path)
+        self.assertEqual([r.id for r in rulebook.rules], ["a"])
+        self.assertEqual(ref["source"], f"file:{self.path}")
+
+    def write_rules(self, rules=RULES):
+        with open(self.path, "w", encoding="utf-8") as handle:
+            json.dump(rules, handle)
+
+
+class AttachRefTests(unittest.TestCase):
+    def test_attach_ref_returns_a_copy(self):
+        response = {"verdict": "allow"}
+        ref = {"source": "inline", "sha256": "abc"}
+        attached = attach_ref(response, ref)
+        self.assertEqual(attached, {"verdict": "allow", "rulebook_ref": ref})
+        self.assertNotIn("rulebook_ref", response)
+        attached["rulebook_ref"]["sha256"] = "mutated"
+        self.assertEqual(ref["sha256"], "abc")
+
+    def test_attach_ref_overwrites_a_stale_ref(self):
+        attached = attach_ref(
+            {"verdict": "allow", "rulebook_ref": {"source": "old"}},
+            {"source": "new", "sha256": "x"},
+        )
+        self.assertEqual(attached["rulebook_ref"]["source"], "new")
+
+
 if __name__ == "__main__":
     unittest.main()

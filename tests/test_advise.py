@@ -164,5 +164,83 @@ class ParametersAndExtractionTests(unittest.TestCase):
         self.assertNotIn("forbids,", user)
 
 
+class ExtractionEdgeTests(unittest.TestCase):
+    def test_fenced_block_is_unwrapped(self):
+        self.assertEqual(_extract_json('```json\n{"a": 1}\n```'), {"a": 1})
+        self.assertEqual(_extract_json('```\n{"a": 1}\n```'), {"a": 1})
+
+    def test_invalid_fence_falls_back_to_the_whole_text(self):
+        self.assertEqual(_extract_json('```json\nnot json\n```\n{"a": 2}'), {"a": 2})
+
+    def test_prose_around_the_object_is_tolerated(self):
+        self.assertEqual(_extract_json('Sure, here it is: {"a": 3} — done'), {"a": 3})
+
+    def test_non_object_payloads_are_rejected(self):
+        for text in ("[1, 2]", '"a string"', "42", "true", "null"):
+            with self.subTest(text=text), self.assertRaises(AdviseError) as ctx:
+                _extract_json(text)
+            self.assertIn("not a JSON object", str(ctx.exception))
+
+    def test_multiple_objects_are_not_merged_and_are_rejected(self):
+        with self.assertRaises(AdviseError):
+            _extract_json('{"a": 1} {"b": 2}')
+
+    def test_empty_output_is_rejected(self):
+        for text in ("", "   ", "\n", None, 42):
+            with self.subTest(text=text), self.assertRaises(AdviseError) as ctx:
+                _extract_json(text)
+            self.assertIn("empty output", str(ctx.exception))
+
+
+class ShapeValidationTests(unittest.TestCase):
+    def test_interpret_single_rule_requires_meaning(self):
+        client = FakeClient('{"permits": [], "confidence": 0.5}')
+        with self.assertRaises(AdviseError) as ctx:
+            advise(BOOK, ACTION_READ, SITUATION, question="interpret",
+                   rule_id="no-rm-rf", client=client)
+        self.assertIn("meaning", str(ctx.exception))
+
+    def test_interpret_whole_rulebook_requires_interpretations_list(self):
+        client = FakeClient('{"meaning": "one rule"}')
+        with self.assertRaises(AdviseError) as ctx:
+            advise(BOOK, ACTION_READ, SITUATION, question="interpret", client=client)
+        self.assertIn("interpretations", str(ctx.exception))
+
+    def test_apply_requires_summary_and_applicable(self):
+        for text in ('{"applicable": []}', '{"summary": "s"}', '{"summary": 1, "applicable": []}'):
+            with self.subTest(text=text):
+                with self.assertRaises(AdviseError) as ctx:
+                    advise(BOOK, ACTION_READ, SITUATION, question="apply", mode="model",
+                           client=FakeClient(text))
+                self.assertIn("summary", str(ctx.exception))
+
+    def test_gap_requires_coverage_vocabulary_and_gaps_list(self):
+        for text in ('{"gaps": []}', '{"coverage": "full", "gaps": []}',
+                     '{"coverage": "partial", "gaps": "nope"}'):
+            with self.subTest(text=text):
+                with self.assertRaises(AdviseError) as ctx:
+                    advise(BOOK, ACTION_READ, SITUATION, question="gap", client=FakeClient(text))
+                self.assertIn("coverage", str(ctx.exception))
+
+    def test_valid_gap_shape_is_echoed_with_model_mode(self):
+        result = advise(BOOK, ACTION_READ, SITUATION, question="gap",
+                        client=FakeClient('{"coverage": "none", "gaps": []}'))
+        self.assertEqual(result, {"coverage": "none", "gaps": [], "mode": "model"})
+
+
+class ClientRequirementTests(unittest.TestCase):
+    def test_model_path_without_a_client_names_the_missing_configuration(self):
+        with self.assertRaises(AdviseError) as ctx:
+            advise(BOOK, ACTION_READ, SITUATION, question="gap")
+        message = str(ctx.exception)
+        self.assertIn("OPENROUTER_API_KEY", message)
+        self.assertIn("HF_TOKEN", message)
+
+    def test_apply_auto_without_client_falls_back_to_the_deterministic_path(self):
+        # no match -> the auto path wants the model, and says so clearly
+        with self.assertRaises(AdviseError):
+            advise(BOOK, ACTION_READ, SITUATION, question="apply")
+
+
 if __name__ == "__main__":
     unittest.main()

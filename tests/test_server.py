@@ -7,6 +7,7 @@ import os
 import tempfile
 import unittest
 from typing import get_args
+from unittest import mock
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -14,7 +15,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from gate_n_guard import __version__
 from gate_n_guard import config as config_mod
 from gate_n_guard import journal as journal_mod
-from gate_n_guard.server import GateHandler, _Verdict, create_server
+from gate_n_guard.server import GateHandler, _Verdict, create_server, main
 
 RULES = {"default": "allow", "rules": [
     {"id": "no-rm", "when": [{"tool": "bash", "arguments": {"command": {"contains": "rm -rf"}}}],
@@ -265,6 +266,85 @@ class AdvertisementTests(unittest.TestCase):
         for name, tool in self.tools.items():
             with self.subTest(tool=name):
                 self.assertIsNone(tool.output_schema)
+
+
+class ToolCallTests(unittest.TestCase):
+    """End-to-end tool calls through the MCPServer with a real temp rulebook
+    and journal, so the wiring (not just the handler) is exercised."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.rulebook = os.path.join(self.dir.name, "rules.json")
+        with open(self.rulebook, "w", encoding="utf-8") as handle:
+            json.dump(RULES, handle)
+        self.journal = os.path.join(self.dir.name, "journal.jsonl")
+        self.server = create_server(make_config(
+            self.dir.name, rulebook=self.rulebook, journal=self.journal,
+        ))
+
+    def call(self, name, args):
+        return asyncio.run(self.server.call_tool(name, args))
+
+    def payload(self, result):
+        self.assertFalse(result.is_error, result.content[0].text)
+        return json.loads(result.content[0].text)
+
+    def test_record_then_audit_through_the_tools(self):
+        stored = self.payload(self.call("record", {
+            "action": {"tool": "deploy"}, "verdict": "confirm",
+            "matched": ["prod"], "outcome": "approved", "actor": "alice",
+        }))
+        self.assertEqual(stored["verdict"], "confirm")
+        audit = self.payload(self.call("audit", {"verdict": "confirm"}))
+        self.assertEqual(audit["count"], 1)
+        self.assertEqual(audit["records"][0]["id"], stored["id"])
+
+    def test_audit_filters_are_applied(self):
+        self.call("record", {"action": {"tool": "deploy"}, "verdict": "confirm"})
+        self.call("record", {"action": {"tool": "read"}, "verdict": "allow"})
+        self.assertEqual(self.payload(self.call("audit", {"tool": "read"}))["count"], 1)
+        self.assertEqual(self.payload(self.call("audit", {"verdict": "deny"}))["count"], 0)
+        self.assertEqual(self.payload(self.call("audit", {"limit": 1}))["count"], 1)
+
+    def test_check_uses_the_env_rulebook_and_attaches_the_ref(self):
+        result = self.payload(self.call("check", {
+            "action": {"tool": "bash", "arguments": {"command": "rm -rf /"}},
+        }))
+        self.assertEqual(result["verdict"], "deny")
+        self.assertEqual(result["rulebook_ref"]["source"], f"file:{self.rulebook}")
+
+    def test_advise_deterministic_through_the_tool(self):
+        result = self.payload(self.call("advise", {
+            "question": "apply",
+            "action": {"tool": "bash", "arguments": {"command": "rm -rf /"}},
+        }))
+        self.assertEqual(result["mode"], "deterministic")
+        self.assertEqual(result["verdict"], "deny")
+        self.assertEqual(result["rulebook_ref"]["source"], f"file:{self.rulebook}")
+
+    def test_advise_model_path_through_the_tool(self):
+        handler = GateHandler(
+            make_config(self.dir.name, rulebook=self.rulebook),
+            client_factory=lambda cfg: DummyClient('{"coverage": "adequate", "gaps": []}'),
+        )
+        server = create_server(handler=handler)
+        result = asyncio.run(server.call_tool("advise", {
+            "question": "gap", "action": {"tool": "read"},
+        }))
+        payload = json.loads(result.content[0].text)
+        self.assertEqual(payload["mode"], "model")
+        self.assertEqual(payload["rulebook_ref"]["source"], f"file:{self.rulebook}")
+
+    def test_failed_tool_call_is_marked_and_still_structured(self):
+        result = self.call("check", {"action": {"tool": "bash"}, "rules": "/etc/hosts"})
+        self.assertTrue(result.is_error)
+        self.assertIn("file:<path>", json.loads(result.content[0].text)["error"])
+
+    def test_main_runs_the_stdio_transport(self):
+        with mock.patch("gate_n_guard.server.create_server") as factory:
+            main()
+        factory.return_value.run.assert_called_once_with(transport="stdio")
 
 
 if __name__ == "__main__":
